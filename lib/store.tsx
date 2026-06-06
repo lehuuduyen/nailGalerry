@@ -47,7 +47,7 @@ function save(key: string, value: unknown) {
 
 // ── Library (published designs + admin review queue) ────────────────────────
 
-type ImportOutcome = { ok: boolean; error?: string; count?: number };
+type ImportOutcome = { ok: boolean; error?: string; count?: number; skipped?: number };
 
 type LibraryContextValue = {
   nails: Nail[];
@@ -55,7 +55,7 @@ type LibraryContextValue = {
   /** Fetch a real post by URL via /api/instagram, then queue it for review. */
   importFromUrl: (url: string) => Promise<ImportOutcome>;
   /** Pull recent posts from a profile via /api/instagram/profile (Apify). */
-  importProfile: (url: string) => Promise<ImportOutcome>;
+  importProfile: (url: string, limit?: number) => Promise<ImportOutcome>;
   /** Load mock sample posts (offline demo / fallback). */
   importSamplePosts: () => void;
   approve: (post: PendingPost, title: string, tags: NailTags) => void;
@@ -87,11 +87,15 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
   const importCountRef = useRef(0);
   const [hydrated, setHydrated] = useState(false);
 
-  // Mirror of `pending` for reads inside callbacks without stale closures.
+  // Mirrors for reads inside callbacks without stale closures.
   const pendingRef = useRef<PendingPost[]>([]);
   useEffect(() => {
     pendingRef.current = pending;
   }, [pending]);
+  const nailsRef = useRef<Nail[]>(MOCK_NAILS);
+  useEffect(() => {
+    nailsRef.current = nails;
+  }, [nails]);
 
   // Run AI tagging for a single post, flipping it to "review" when done.
   const runTag = useCallback((post: PendingPost) => {
@@ -164,13 +168,13 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
 
   // Real import: pull recent posts from a whole profile (Apify scraper).
   const importProfile = useCallback(
-    async (url: string): Promise<ImportOutcome> => {
+    async (url: string, limit?: number): Promise<ImportOutcome> => {
       let res: Response;
       try {
         res = await fetch("/api/instagram/profile", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url }),
+          body: JSON.stringify({ url, limit }),
         });
       } catch {
         return { ok: false, error: "Network error. Is the server running?" };
@@ -181,13 +185,39 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, error: data.error ?? "Couldn't import this profile." };
       }
 
-      type ApiPost = { imageUrl: string; caption?: string; handle?: string; permalink?: string };
+      type ApiPost = {
+        shortcode?: string;
+        imageUrl: string;
+        caption?: string;
+        handle?: string;
+        permalink?: string;
+      };
       const posts: ApiPost[] = data.posts ?? [];
       if (posts.length === 0) return { ok: false, error: "No photos found for that account." };
 
-      const stamp = Date.now();
-      const newPosts: PendingPost[] = posts.map((p, i) => ({
-        id: `igprofile-${stamp}-${i}`,
+      // Stable id per Instagram post so re-importing the same post is detected.
+      const idFor = (p: ApiPost, i: number) =>
+        p.shortcode ? `ig-${p.shortcode}` : `ig-${p.permalink ?? p.imageUrl ?? i}`;
+
+      // Skip posts already published (nails) or already queued (pending).
+      // Match on both id and permalink so it also catches anything imported
+      // under the older id scheme.
+      const existing = new Set([
+        ...nailsRef.current.flatMap((n) => [n.id, n.source.url]),
+        ...pendingRef.current.flatMap((p) => [p.id, p.source.url]),
+      ]);
+
+      const fresh = posts.filter(
+        (p, i) => !existing.has(idFor(p, i)) && !existing.has(p.permalink ?? ""),
+      );
+      const skipped = posts.length - fresh.length;
+
+      if (fresh.length === 0) {
+        return { ok: true, count: 0, skipped };
+      }
+
+      const newPosts: PendingPost[] = fresh.map((p, i) => ({
+        id: idFor(p, i),
         title: titleFromCaption(p.caption ?? "", p.handle ?? "instagram"),
         source: {
           platform: "instagram",
@@ -201,7 +231,7 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
       }));
       setPending((prev) => [...newPosts, ...prev]);
       newPosts.forEach(runTag);
-      return { ok: true, count: newPosts.length };
+      return { ok: true, count: newPosts.length, skipped };
     },
     [runTag],
   );

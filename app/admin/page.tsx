@@ -14,6 +14,7 @@ export default function AdminPage() {
     useLibrary();
   const [mode, setMode] = useState<Mode>("profile");
   const [value, setValue] = useState("");
+  const [count, setCount] = useState(30);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -27,13 +28,31 @@ export default function AdminPage() {
     setError(null);
     setNotice(null);
     const result =
-      mode === "profile" ? await importProfile(trimmed) : await importFromUrl(trimmed);
+      mode === "profile" ? await importProfile(trimmed, count) : await importFromUrl(trimmed);
     setLoading(false);
-    if (result.ok) {
-      setValue("");
-      if (mode === "profile") setNotice(`Imported ${result.count ?? 0} posts into the queue.`);
-    } else {
+    if (!result.ok) {
       setError(result.error ?? "Import failed.");
+      return;
+    }
+    if (mode === "profile") {
+      const added = result.count ?? 0;
+      const skipped = result.skipped ?? 0;
+      if (added === 0) {
+        setNotice(
+          skipped > 0
+            ? `Nothing new — all ${skipped} recent posts are already imported. Raise the count to fetch older posts.`
+            : "No posts found.",
+        );
+      } else {
+        setNotice(
+          `Imported ${added} new post${added > 1 ? "s" : ""}` +
+            (skipped > 0 ? ` (${skipped} already in your library)` : "") +
+            ".",
+        );
+      }
+      // Keep the URL so it's easy to raise the count and fetch more.
+    } else {
+      setValue("");
     }
   }
 
@@ -68,7 +87,7 @@ export default function AdminPage() {
 
           <p className="mt-2 text-xs text-[var(--color-muted)]">
             {mode === "profile"
-              ? "Paste a profile link (e.g. instagram.com/nailssxatzi). Pulls recent posts via the Apify scraper — needs APIFY_TOKEN."
+              ? "Paste a profile link (e.g. instagram.com/nailssxatzi). Pulls recent posts via the Apify scraper — needs APIFY_TOKEN. Re-importing skips posts you already have."
               : "Paste a post link (needs an oEmbed token), or right-click the photo → “Copy image address” and paste that direct image link."}
           </p>
 
@@ -85,6 +104,21 @@ export default function AdminPage() {
               }
               className="h-11 w-full rounded-full border border-[var(--color-line)] bg-white px-4 text-sm outline-none focus:border-accent"
             />
+
+            {mode === "profile" && (
+              <label className="flex items-center justify-between gap-2 px-1 text-xs text-[var(--color-muted)]">
+                How many recent posts
+                <select
+                  value={count}
+                  onChange={(e) => setCount(Number(e.target.value))}
+                  className="h-9 rounded-full border border-[var(--color-line)] bg-white px-3 text-sm text-[var(--color-ink)] outline-none focus:border-accent"
+                >
+                  <option value={12}>12</option>
+                  <option value={30}>30</option>
+                  <option value={50}>50</option>
+                </select>
+              </label>
+            )}
             <Button className="w-full" onClick={onImport} disabled={loading || !value.trim()}>
               {loading ? (
                 <>

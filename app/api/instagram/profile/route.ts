@@ -16,6 +16,7 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 type ProfilePost = {
+  shortcode: string;
   imageUrl: string;
   caption: string;
   handle: string;
@@ -82,7 +83,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const limit = Math.min(Math.max(body.limit ?? 12, 1), 30);
+  const limit = Math.min(Math.max(body.limit ?? 30, 1), 50);
 
   const endpoint =
     "https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items" +
@@ -128,11 +129,13 @@ export async function POST(req: Request) {
     .map((it) => {
       const imageUrl = it.displayUrl ?? it.images?.[0];
       if (!imageUrl) return null;
+      const shortcode = it.shortCode ?? "";
       return {
+        shortcode,
         imageUrl,
         caption: it.caption ?? "",
         handle: it.ownerUsername ?? profile.username,
-        permalink: it.url ?? `${profile.url}p/${it.shortCode ?? ""}/`,
+        permalink: it.url ?? `${profile.url}p/${shortcode}/`,
       };
     })
     .filter((p): p is ProfilePost => p !== null);
