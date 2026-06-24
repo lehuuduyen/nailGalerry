@@ -21,6 +21,8 @@ const QUESTION: Record<Exclude<Step, "done">, string> = {
   occasion: "And what occasion are you planning for?",
 };
 
+const THINKING = "Let me find the perfect designs for you…";
+
 export default function AdvisorPage() {
   const { published: nails } = useLibrary();
   const [step, setStep] = useState<Step>("name");
@@ -37,32 +39,65 @@ export default function AdvisorPage() {
   const colorOptions = GROUP_BY_KEY.color.values;
   const occasionOptions = GROUP_BY_KEY.occasion.values;
 
-  function advance(answer: string) {
-    const next: Message[] = [{ role: "user", text: answer }];
+  async function fetchAdvisorReply(p: AdvisorProfile, res: AdvisorResult): Promise<string> {
+    try {
+      const r = await fetch("/api/advisor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: p.name,
+          age: res.age,
+          element: res.element,
+          elementVi: ELEMENT_VI[res.element],
+          favoriteColor: p.favoriteColor,
+          occasion: p.occasion,
+          recommendedColors: res.recommendedColors,
+          picks: res.recommendations.map((s) => ({
+            title: s.nail.title,
+            color: s.nail.color,
+            style: s.nail.style,
+            shape: s.nail.shape,
+          })),
+        }),
+      });
+      const d = await r.json();
+      return (d.reply as string) || res.reply;
+    } catch {
+      return res.reply;
+    }
+  }
+
+  async function advance(answer: string) {
     const nextProfile = { ...profile };
 
     if (step === "name") {
       nextProfile.name = answer;
-      next.push({ role: "bot", text: QUESTION.birthYear });
       setStep("birthYear");
+      setMessages((m) => [...m, { role: "user", text: answer }, { role: "bot", text: QUESTION.birthYear }]);
     } else if (step === "birthYear") {
       nextProfile.birthYear = parseInt(answer, 10);
-      next.push({ role: "bot", text: QUESTION.color });
       setStep("color");
+      setMessages((m) => [...m, { role: "user", text: answer }, { role: "bot", text: QUESTION.color }]);
     } else if (step === "color") {
       nextProfile.favoriteColor = answer;
-      next.push({ role: "bot", text: QUESTION.occasion });
       setStep("occasion");
+      setMessages((m) => [...m, { role: "user", text: answer }, { role: "bot", text: QUESTION.occasion }]);
     } else if (step === "occasion") {
       nextProfile.occasion = answer;
-      const res = chatAdvisor(nextProfile as AdvisorProfile, nails);
-      next.push({ role: "bot", text: res.reply });
-      setResult(res);
       setStep("done");
+      const res = chatAdvisor(nextProfile as AdvisorProfile, nails);
+      setResult(res);
+      // Show the answer + a "thinking" bubble, then swap in the AI reply.
+      setMessages((m) => [...m, { role: "user", text: answer }, { role: "bot", text: THINKING }]);
+      const reply = await fetchAdvisorReply(nextProfile as AdvisorProfile, res);
+      setMessages((m) => {
+        const copy = [...m];
+        copy[copy.length - 1] = { role: "bot", text: reply };
+        return copy;
+      });
     }
 
     setProfile(nextProfile);
-    setMessages((m) => [...m, ...next]);
     setDraft("");
   }
 

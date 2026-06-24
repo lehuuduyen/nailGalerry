@@ -7,7 +7,7 @@ import type { Nail, NailTags, TagKey } from "@/lib/types";
 import { GradientThumb } from "./GradientThumb";
 import { SelectChips } from "./TagChipGroup";
 import { Button } from "./ui/Button";
-import { CheckIcon, CloseIcon, InstagramIcon } from "./icons";
+import { CheckIcon, CloseIcon } from "./icons";
 
 export function PublishedNailCard({
   nail,
@@ -51,9 +51,6 @@ export function PublishedNailCard({
         alt={nail.title}
         className="aspect-[16/10] w-full"
       >
-        <div className="absolute bottom-2 left-3 inline-flex items-center gap-1.5 rounded-full bg-black/35 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
-          <InstagramIcon width={13} height={13} />@{nail.source.handle}
-        </div>
         {onToggleSelect && (
           <label className="absolute right-2 top-2 flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-white/85 shadow-[var(--shadow-card)] backdrop-blur">
             <input

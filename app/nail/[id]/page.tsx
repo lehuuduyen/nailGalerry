@@ -6,7 +6,7 @@ import { TopAppBar } from "@/components/TopAppBar";
 import { GradientThumb } from "@/components/GradientThumb";
 import { NailGrid } from "@/components/NailGrid";
 import { Badge } from "@/components/ui/Badge";
-import { HeartIcon, InstagramIcon } from "@/components/icons";
+import { HeartIcon } from "@/components/icons";
 import { TAG_GROUPS } from "@/lib/constants";
 import { similarNails } from "@/lib/filter";
 import { useFavorites, useLibrary } from "@/lib/store";
@@ -62,14 +62,6 @@ export default function NailDetailPage() {
 
       <div className="px-4 pt-4">
         <h1 className="text-xl font-bold text-[var(--color-ink)]">{nail.title}</h1>
-        <a
-          href={nail.source.url}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-1 inline-flex items-center gap-1.5 text-sm text-[var(--color-muted)]"
-        >
-          <InstagramIcon width={16} height={16} />@{nail.source.handle}
-        </a>
 
         <div className="mt-4 flex flex-col gap-3">
           {TAG_GROUPS.map((g) => (
