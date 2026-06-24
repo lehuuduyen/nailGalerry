@@ -25,6 +25,14 @@ export type Nail = NailTags & {
   /** Optional real image URL (e.g. an uploaded object URL). Absent => gradient placeholder. */
   imageUrl?: string;
   source: InstagramSource;
+  /** Original caption, kept for later AI tagging context. */
+  caption?: string;
+  /**
+   * Moderation state. "pending" = imported, awaiting admin approval (hidden
+   * from visitors); "approved" = live in the public gallery. Missing is
+   * treated as approved (legacy items).
+   */
+  status?: "pending" | "approved";
 };
 
 /** A post pulled from Instagram awaiting AI tagging + admin confirmation. */

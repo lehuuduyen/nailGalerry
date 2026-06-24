@@ -83,7 +83,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const limit = Math.min(Math.max(body.limit ?? 30, 1), 50);
+  const limit = Math.min(Math.max(body.limit ?? 30, 1), 200);
 
   const endpoint =
     "https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items" +

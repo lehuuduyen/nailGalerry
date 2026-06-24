@@ -11,8 +11,29 @@ import {
 } from "react";
 import { autoTagImage } from "./ai";
 import { TAG_GROUPS } from "./constants";
-import { INSTAGRAM_POOL, MOCK_NAILS } from "./mock-data";
-import type { Nail, NailTags, PendingPost, TagKey } from "./types";
+import { isInstagramCdn } from "./img";
+import { INSTAGRAM_POOL } from "./mock-data";
+import type { Nail, NailTags, TagKey } from "./types";
+
+/**
+ * Persist an Instagram image to our storage (R2) so it survives the IG link
+ * expiry. Returns the permanent URL, or the original if storage isn't set up
+ * or the image isn't an Instagram CDN URL. Never throws.
+ */
+async function persistImage(url?: string): Promise<string | undefined> {
+  if (!url || !isInstagramCdn(url)) return url;
+  try {
+    const res = await fetch("/api/store-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ src: url }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return data.url ?? url;
+  } catch {
+    return url;
+  }
+}
 
 /** Fill every tag group, falling back to the first value if AI left one blank. */
 function completeTags(suggested: Partial<NailTags>): NailTags {
@@ -21,8 +42,8 @@ function completeTags(suggested: Partial<NailTags>): NailTags {
   return tags;
 }
 
-const LS_NAILS = "naillib:nails";
-const LS_PENDING = "naillib:pending";
+// The whole catalog (pending + approved) lives on R2 (see /api/catalog) so it's
+// shared across browsers. Only the import counter stays in localStorage.
 const LS_IMPORTS = "naillib:imports";
 const LS_FAVS = "naillib:favorites";
 
@@ -45,23 +66,35 @@ function save(key: string, value: unknown) {
   }
 }
 
-// ── Library (published designs + admin review queue) ────────────────────────
+// ── Library (catalog of designs, each pending or approved) ───────────────────
 
 type ImportOutcome = { ok: boolean; error?: string; count?: number; skipped?: number };
 
 type LibraryContextValue = {
+  /** Every catalog item — the admin sees both pending and approved. */
   nails: Nail[];
-  pending: PendingPost[];
-  /** Fetch a real post by URL via /api/instagram, then queue it for review. */
+  /** Approved items only — what visitors see in the public gallery. */
+  published: Nail[];
+  /** Import a single post by URL: uploads the image to R2, adds it as pending. */
   importFromUrl: (url: string) => Promise<ImportOutcome>;
-  /** Pull recent posts from a profile via /api/instagram/profile (Apify). */
+  /** Import recent posts from a profile: uploads images to R2, adds as pending. */
   importProfile: (url: string, limit?: number) => Promise<ImportOutcome>;
-  /** Load mock sample posts (offline demo / fallback). */
+  /** Load demo sample designs as pending (offline demo). */
   importSamplePosts: () => void;
-  approve: (post: PendingPost, title: string, tags: NailTags) => void;
-  /** Publish every post currently in "review" with its suggested tags. */
-  approveAll: () => number;
-  reject: (id: string) => void;
+  /** Run Gemini auto-tagging on every pending design. Returns how many. */
+  tagPending: () => Promise<number>;
+  /** Approve one pending design — makes it visible to visitors. */
+  approveNail: (id: string) => void;
+  /** Approve every pending design. Returns how many. */
+  approveAllPending: () => number;
+  /** Edit a design's title/tags and persist to R2. */
+  updateNail: (id: string, patch: Partial<Nail>) => void;
+  /** Delete a design — removes it from the catalog and from R2. */
+  removeNail: (id: string) => void;
+  /** Delete several designs at once (catalog + R2). */
+  removeMany: (ids: string[]) => void;
+  /** Wipe the whole catalog (and favorites) for a fresh start. */
+  clearLibrary: () => void;
 };
 
 const LibraryContext = createContext<LibraryContextValue | null>(null);
@@ -77,59 +110,45 @@ function titleFromCaption(caption: string, handle: string): string {
 }
 
 function LibraryProvider({ children }: { children: React.ReactNode }) {
-  const [nails, setNails] = useState<Nail[]>(MOCK_NAILS);
-  const [pending, setPending] = useState<PendingPost[]>([]);
-  // How many import batches have ever run — keeps generated ids unique and
-  // lets us cycle the mock pool forever so the button never silently no-ops.
-  // The ref is the authoritative counter (collision-proof across rapid clicks);
-  // state mirrors it only for localStorage persistence.
+  const [nails, setNails] = useState<Nail[]>([]);
+  // How many demo import batches have run — keeps generated ids unique.
   const [importCount, setImportCount] = useState(0);
   const importCountRef = useRef(0);
   const [hydrated, setHydrated] = useState(false);
 
-  // Mirrors for reads inside callbacks without stale closures.
-  const pendingRef = useRef<PendingPost[]>([]);
-  useEffect(() => {
-    pendingRef.current = pending;
-  }, [pending]);
-  const nailsRef = useRef<Nail[]>(MOCK_NAILS);
+  // Mirror for reads inside callbacks without stale closures.
+  const nailsRef = useRef<Nail[]>([]);
   useEffect(() => {
     nailsRef.current = nails;
   }, [nails]);
 
-  // Run AI tagging for a single post, flipping it to "review" when done.
-  const runTag = useCallback((post: PendingPost) => {
-    autoTagImage({ title: post.title }).then((tags) => {
-      setPending((prev) =>
-        prev.map((pp) =>
-          pp.id === post.id ? { ...pp, suggestedTags: tags, status: "review" } : pp,
-        ),
-      );
-    });
-  }, []);
-
-  // Hydrate from localStorage once on the client.
+  // Hydrate: the import counter from localStorage, the catalog from R2.
   useEffect(() => {
-    setNails(load(LS_NAILS, MOCK_NAILS));
-    const savedPending = load<PendingPost[]>(LS_PENDING, []);
-    setPending(savedPending);
     const savedImports = load(LS_IMPORTS, 0);
     importCountRef.current = savedImports;
     setImportCount(savedImports);
     setHydrated(true);
-    // Recover any posts left mid-analysis by a reload — re-run their tagging.
-    savedPending.filter((p) => p.status === "analyzing").forEach(runTag);
-  }, [runTag]);
+    fetch("/api/catalog")
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d.nails)) setNails(d.nails as Nail[]);
+      })
+      .catch(() => {});
+  }, []);
 
-  useEffect(() => {
-    if (hydrated) save(LS_NAILS, nails);
-  }, [nails, hydrated]);
-  useEffect(() => {
-    if (hydrated) save(LS_PENDING, pending);
-  }, [pending, hydrated]);
   useEffect(() => {
     if (hydrated) save(LS_IMPORTS, importCount);
   }, [importCount, hydrated]);
+
+  // Persist the catalog to R2 so every browser sees the same thing.
+  const saveCatalog = useCallback((next: Nail[]) => {
+    nailsRef.current = next;
+    fetch("/api/catalog", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nails: next }),
+    }).catch(() => {});
+  }, []);
 
   // Real import: paste an Instagram post URL -> backend fetches the image.
   const importFromUrl = useCallback(
@@ -144,26 +163,30 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
       } catch {
         return { ok: false, error: "Network error. Is the server running?" };
       }
-
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        return { ok: false, error: data.error ?? "Couldn't import this post." };
-      }
+      if (!res.ok) return { ok: false, error: data.error ?? "Couldn't import this post." };
 
-      const post: PendingPost = {
+      // Upload to R2 now (no Gemini); land it as pending for admin approval.
+      const imageUrl = await persistImage(data.imageUrl);
+      const nail: Nail = {
         id: `igurl-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
         title: titleFromCaption(data.caption ?? "", data.handle ?? "instagram"),
-        source: { platform: "instagram", handle: data.handle, url: data.permalink },
-        imageUrl: data.imageUrl,
+        ...completeTags({}),
+        imageUrl,
         caption: data.caption,
-        suggestedTags: {},
-        status: "analyzing",
+        source: {
+          platform: "instagram",
+          handle: data.handle ?? "instagram",
+          url: data.permalink ?? url,
+        },
+        status: "pending",
       };
-      setPending((prev) => [post, ...prev]);
-      runTag(post);
-      return { ok: true };
+      const next = [nail, ...nailsRef.current];
+      setNails(next);
+      saveCatalog(next);
+      return { ok: true, count: 1 };
     },
-    [runTag],
+    [saveCatalog],
   );
 
   // Real import: pull recent posts from a whole profile (Apify scraper).
@@ -179,11 +202,8 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
       } catch {
         return { ok: false, error: "Network error. Is the server running?" };
       }
-
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        return { ok: false, error: data.error ?? "Couldn't import this profile." };
-      }
+      if (!res.ok) return { ok: false, error: data.error ?? "Couldn't import this profile." };
 
       type ApiPost = {
         shortcode?: string;
@@ -199,112 +219,186 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
       const idFor = (p: ApiPost, i: number) =>
         p.shortcode ? `ig-${p.shortcode}` : `ig-${p.permalink ?? p.imageUrl ?? i}`;
 
-      // Skip posts already published (nails) or already queued (pending).
-      // Match on both id and permalink so it also catches anything imported
-      // under the older id scheme.
-      const existing = new Set([
-        ...nailsRef.current.flatMap((n) => [n.id, n.source.url]),
-        ...pendingRef.current.flatMap((p) => [p.id, p.source.url]),
-      ]);
-
+      const existing = new Set(nailsRef.current.flatMap((n) => [n.id, n.source.url]));
       const fresh = posts.filter(
         (p, i) => !existing.has(idFor(p, i)) && !existing.has(p.permalink ?? ""),
       );
       const skipped = posts.length - fresh.length;
+      if (fresh.length === 0) return { ok: true, count: 0, skipped };
 
-      if (fresh.length === 0) {
-        return { ok: true, count: 0, skipped };
-      }
-
-      const newPosts: PendingPost[] = fresh.map((p, i) => ({
-        id: idFor(p, i),
-        title: titleFromCaption(p.caption ?? "", p.handle ?? "instagram"),
-        source: {
-          platform: "instagram",
-          handle: p.handle ?? "instagram",
-          url: p.permalink ?? url,
-        },
-        imageUrl: p.imageUrl,
-        caption: p.caption,
-        suggestedTags: {},
-        status: "analyzing",
-      }));
-      setPending((prev) => [...newPosts, ...prev]);
-      newPosts.forEach(runTag);
-      return { ok: true, count: newPosts.length, skipped };
+      // Upload every image to R2 now (while the IG links are fresh), no Gemini —
+      // they land as pending; tag/approve them later from the admin.
+      const newNails: Nail[] = await Promise.all(
+        fresh.map(async (p, i) => ({
+          id: idFor(p, i),
+          title: titleFromCaption(p.caption ?? "", p.handle ?? "instagram"),
+          ...completeTags({}),
+          imageUrl: await persistImage(p.imageUrl),
+          caption: p.caption,
+          source: {
+            platform: "instagram" as const,
+            handle: p.handle ?? "instagram",
+            url: p.permalink ?? url,
+          },
+          status: "pending" as const,
+        })),
+      );
+      const next = [...newNails, ...nailsRef.current];
+      setNails(next);
+      saveCatalog(next);
+      return { ok: true, count: newNails.length, skipped };
     },
-    [runTag],
+    [saveCatalog],
   );
 
-  // Mock import: load sample posts (offline demo / fallback when no URL).
+  // Mock import: load sample designs as pending (offline demo when no URL).
   const importSamplePosts = useCallback(() => {
     const batchIndex = importCountRef.current;
     importCountRef.current = batchIndex + 1;
     const start = batchIndex * IMPORT_BATCH;
-    // Cycle through the mock pool indefinitely; suffix ids so they stay unique.
-    const newPosts: PendingPost[] = Array.from({ length: IMPORT_BATCH }, (_, i) => {
+    const newNails: Nail[] = Array.from({ length: IMPORT_BATCH }, (_, i) => {
       const base = INSTAGRAM_POOL[(start + i) % INSTAGRAM_POOL.length];
-      const uid = `${base.id}-${start + i}`;
       return {
-        id: uid,
+        id: `${base.id}-${start + i}`,
         title: base.title,
+        ...completeTags({}),
         source: { ...base.source, url: `${base.source.url}-${start + i}` },
-        suggestedTags: {},
-        status: "analyzing",
+        status: "pending" as const,
       };
     });
-    setPending((prev) => [...newPosts, ...prev]);
+    const next = [...newNails, ...nailsRef.current];
+    setNails(next);
     setImportCount(importCountRef.current);
-    newPosts.forEach(runTag);
-  }, [runTag]);
+    saveCatalog(next);
+  }, [saveCatalog]);
 
-  const approve = useCallback((post: PendingPost, title: string, tags: NailTags) => {
-    const nail: Nail = {
-      id: post.id,
-      title,
-      ...tags,
-      imageUrl: post.imageUrl,
-      source: post.source,
-    };
-    // Guard makes this idempotent (StrictMode double-invoke won't duplicate).
-    setNails((ns) => (ns.some((n) => n.id === nail.id) ? ns : [nail, ...ns]));
-    setPending((prev) => prev.filter((p) => p.id !== post.id));
-  }, []);
+  // Run Gemini auto-tagging on every pending design at once.
+  const tagPending = useCallback(async (): Promise<number> => {
+    const pendingNails = nailsRef.current.filter((n) => n.status === "pending");
+    if (pendingNails.length === 0) return 0;
+    const tagged = await Promise.all(
+      pendingNails.map(async (n) => ({
+        id: n.id,
+        tags: await autoTagImage({ title: n.title, imageUrl: n.imageUrl, caption: n.caption }),
+      })),
+    );
+    const byId = new Map(tagged.map((t) => [t.id, t.tags]));
+    const next = nailsRef.current.map((n) =>
+      byId.has(n.id) ? { ...n, ...completeTags(byId.get(n.id)!) } : n,
+    );
+    setNails(next);
+    saveCatalog(next);
+    return pendingNails.length;
+  }, [saveCatalog]);
 
-  const approveAll = useCallback((): number => {
-    const ready = pendingRef.current.filter((p) => p.status === "review");
-    if (ready.length === 0) return 0;
-    const newNails: Nail[] = ready.map((post) => ({
-      id: post.id,
-      title: post.title,
-      ...completeTags(post.suggestedTags),
-      imageUrl: post.imageUrl,
-      source: post.source,
-    }));
-    setNails((ns) => {
-      const have = new Set(ns.map((n) => n.id));
-      return [...newNails.filter((n) => !have.has(n.id)), ...ns];
-    });
-    setPending((prev) => prev.filter((p) => p.status !== "review"));
-    return ready.length;
-  }, []);
+  const approveNail = useCallback(
+    (id: string) => {
+      const next = nailsRef.current.map((n) =>
+        n.id === id ? { ...n, status: "approved" as const } : n,
+      );
+      setNails(next);
+      saveCatalog(next);
+    },
+    [saveCatalog],
+  );
 
-  const reject = useCallback((id: string) => {
-    setPending((prev) => prev.filter((p) => p.id !== id));
-  }, []);
+  const approveAllPending = useCallback((): number => {
+    const count = nailsRef.current.filter((n) => n.status === "pending").length;
+    if (count === 0) return 0;
+    const next = nailsRef.current.map((n) =>
+      n.status === "pending" ? { ...n, status: "approved" as const } : n,
+    );
+    setNails(next);
+    saveCatalog(next);
+    return count;
+  }, [saveCatalog]);
+
+  const updateNail = useCallback(
+    (id: string, patch: Partial<Nail>) => {
+      const next = nailsRef.current.map((n) => (n.id === id ? { ...n, ...patch } : n));
+      setNails(next);
+      saveCatalog(next);
+    },
+    [saveCatalog],
+  );
+
+  // Delete the underlying R2 image for a nail (no-op if it's not an R2 url).
+  const deleteImage = (url?: string) => {
+    if (!url) return;
+    fetch("/api/store-image", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }).catch(() => {});
+  };
+
+  const removeNail = useCallback(
+    (id: string) => {
+      const target = nailsRef.current.find((n) => n.id === id);
+      const next = nailsRef.current.filter((n) => n.id !== id);
+      setNails(next);
+      saveCatalog(next);
+      deleteImage(target?.imageUrl);
+    },
+    [saveCatalog],
+  );
+
+  const removeMany = useCallback(
+    (ids: string[]) => {
+      const idSet = new Set(ids);
+      const targets = nailsRef.current.filter((n) => idSet.has(n.id));
+      if (targets.length === 0) return;
+      const next = nailsRef.current.filter((n) => !idSet.has(n.id));
+      setNails(next);
+      saveCatalog(next);
+      targets.forEach((t) => deleteImage(t.imageUrl));
+    },
+    [saveCatalog],
+  );
+
+  // Reset everything to a clean slate (empty catalog written to R2, and the
+  // underlying images deleted from R2 too).
+  const clearLibrary = useCallback(() => {
+    const current = nailsRef.current;
+    setNails([]);
+    setImportCount(0);
+    importCountRef.current = 0;
+    if (typeof window !== "undefined") window.localStorage.removeItem(LS_FAVS);
+    saveCatalog([]);
+    current.forEach((n) => deleteImage(n.imageUrl));
+  }, [saveCatalog]);
+
+  const published = useMemo(() => nails.filter((n) => n.status !== "pending"), [nails]);
 
   const value = useMemo(
     () => ({
       nails,
-      pending,
+      published,
       importFromUrl,
       importProfile,
       importSamplePosts,
-      approve,
-      approveAll,
-      reject,
+      tagPending,
+      approveNail,
+      approveAllPending,
+      updateNail,
+      removeNail,
+      removeMany,
+      clearLibrary,
     }),
-    [nails, pending, importFromUrl, importProfile, importSamplePosts, approve, approveAll, reject],
+    [
+      nails,
+      published,
+      importFromUrl,
+      importProfile,
+      importSamplePosts,
+      tagPending,
+      approveNail,
+      approveAllPending,
+      updateNail,
+      removeNail,
+      removeMany,
+      clearLibrary,
+    ],
   );
 
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>;

@@ -22,7 +22,7 @@ const QUESTION: Record<Exclude<Step, "done">, string> = {
 };
 
 export default function AdvisorPage() {
-  const { nails } = useLibrary();
+  const { published: nails } = useLibrary();
   const [step, setStep] = useState<Step>("name");
   const [messages, setMessages] = useState<Message[]>([{ role: "bot", text: QUESTION.name }]);
   const [draft, setDraft] = useState("");

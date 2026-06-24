@@ -10,7 +10,7 @@ import { countActive, EMPTY_FILTERS, useNailFilter, type FilterState } from "@/l
 import { useLibrary } from "@/lib/store";
 
 export default function HomePage() {
-  const { nails } = useLibrary();
+  const { published: nails } = useLibrary();
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [sheetOpen, setSheetOpen] = useState(false);

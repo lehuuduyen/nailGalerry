@@ -5,7 +5,7 @@ import { NailGrid } from "@/components/NailGrid";
 import { useFavorites, useLibrary } from "@/lib/store";
 
 export default function FavoritesPage() {
-  const { nails } = useLibrary();
+  const { published: nails } = useLibrary();
   const { favorites } = useFavorites();
 
   const saved = nails.filter((n) => favorites.includes(n.id));

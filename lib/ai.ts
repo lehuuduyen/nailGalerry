@@ -18,22 +18,45 @@ function sample<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-/**
- * Auto-tag an Instagram image. Returns a suggested value for each of the 8
- * groups, which the admin can then edit/confirm in the review queue.
- *
- * TODO: replace with `POST /api/auto-tag` sending the image to a vision model
- * and mapping its labels back onto TAG_GROUPS. Keep the return shape identical.
- */
-export async function autoTagImage(
-  _input?: { title?: string; file?: File },
-): Promise<Partial<NailTags>> {
-  await delay(900 + Math.random() * 700); // simulate model latency
+/** Random placeholder tags — used when no image is available or AI is off. */
+function randomTags(): Partial<NailTags> {
   const tags: Partial<NailTags> = {};
   for (const group of TAG_GROUPS) {
     tags[group.key as TagKey] = sample(group.values);
   }
   return tags;
+}
+
+/**
+ * Auto-tag a nail-design image. Returns a suggested value for each of the 8
+ * groups, which the admin can then edit/confirm in the review queue.
+ *
+ * When an `imageUrl` is given, this asks the vision model via `/api/auto-tag`
+ * (Google Gemini) to classify the actual photo. Falls back to random
+ * placeholder tags when there's no image or the model isn't configured/fails.
+ */
+export async function autoTagImage(input?: {
+  title?: string;
+  imageUrl?: string;
+  caption?: string;
+}): Promise<Partial<NailTags>> {
+  if (!input?.imageUrl) {
+    await delay(900 + Math.random() * 700); // simulate model latency
+    return randomTags();
+  }
+  try {
+    const res = await fetch("/api/auto-tag", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageUrl: input.imageUrl, caption: input.caption }),
+    });
+    if (!res.ok) return randomTags();
+    const data = (await res.json()) as { tags?: Partial<NailTags> };
+    // Use the model's tags; backfill any the model omitted with a random pick.
+    return { ...randomTags(), ...(data.tags ?? {}) };
+  } catch {
+    return randomTags();
+  }
 }
 
 // ── Advisor ────────────────────────────────────────────────────────────────

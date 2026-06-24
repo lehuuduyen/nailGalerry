@@ -1,6 +1,13 @@
 import type { TagKey } from "./types";
 
 /**
+ * localStorage flag marking this browser as a signed-in admin, so the Admin
+ * tab can be shown only to them. Not a security boundary — proxy.ts enforces
+ * the actual access control.
+ */
+export const ADMIN_FLAG = "naillib:isAdmin";
+
+/**
  * The 8 tag groups — the single source of truth shared by the filter sheet,
  * the admin tag editor, the AI auto-tagger, and the advisor.
  */

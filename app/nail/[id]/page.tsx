@@ -13,7 +13,7 @@ import { useFavorites, useLibrary } from "@/lib/store";
 
 export default function NailDetailPage() {
   const params = useParams<{ id: string }>();
-  const { nails } = useLibrary();
+  const { published: nails } = useLibrary();
   const { isFavorite, toggleFavorite } = useFavorites();
 
   const nail = nails.find((n) => n.id === params.id);
