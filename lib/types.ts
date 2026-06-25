@@ -19,12 +19,29 @@ export type InstagramSource = {
   url: string;
 };
 
+/** A design uploaded directly by a visitor (not scraped from Instagram). */
+export type UserSource = {
+  platform: "user";
+  /** The contributor's display name. */
+  handle: string;
+  url?: string;
+};
+
+/** Where a design came from — an Instagram import or a user upload. */
+export type Source = InstagramSource | UserSource;
+
 export type Nail = NailTags & {
   id: string;
   title: string;
   /** Optional real image URL (e.g. an uploaded object URL). Absent => gradient placeholder. */
   imageUrl?: string;
-  source: InstagramSource;
+  source: Source;
+  /** Display name of the visitor who uploaded this design (user submissions). */
+  contributor?: string;
+  /** Account id of the uploader, so they can manage their own submissions. */
+  ownerId?: string;
+  /** Global number of likes ("tym") this design has received. */
+  likeCount?: number;
   /** Original caption, kept for later AI tagging context. */
   caption?: string;
   /**

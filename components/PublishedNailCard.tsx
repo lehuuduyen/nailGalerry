@@ -68,6 +68,11 @@ export function PublishedNailCard({
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-[var(--color-ink)]">{nail.title}</p>
+              {nail.contributor && (
+                <p className="truncate text-[12px] font-medium text-accent">
+                  by {nail.contributor}
+                </p>
+              )}
               <p className="truncate text-[12px] text-[var(--color-muted)]">
                 {nail.color} · {nail.style} · {nail.shape} · {nail.length}
               </p>

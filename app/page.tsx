@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TopAppBar } from "@/components/TopAppBar";
 import { SearchBar } from "@/components/SearchBar";
 import { ActiveFilters } from "@/components/ActiveFilters";
@@ -10,10 +10,15 @@ import { countActive, EMPTY_FILTERS, useNailFilter, type FilterState } from "@/l
 import { useLibrary } from "@/lib/store";
 
 export default function HomePage() {
-  const { published: nails } = useLibrary();
+  const { published: nails, refresh } = useLibrary();
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [sheetOpen, setSheetOpen] = useState(false);
+
+  // Re-fetch fresh images + like counts every time the Home tab is opened.
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   const results = useNailFilter(nails, filters, query);
 

@@ -89,6 +89,36 @@ export function CheckIcon({ filled, ...props }: IconProps) {
   );
 }
 
+export function UserIcon({ filled, ...props }: IconProps) {
+  return (
+    <svg {...base} fill={filled ? "currentColor" : "none"} {...props}>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c0-3.6 3.6-6 8-6s8 2.4 8 6" />
+    </svg>
+  );
+}
+
+export function TrashIcon({ filled, ...props }: IconProps) {
+  return (
+    <svg {...base} fill={filled ? "currentColor" : "none"} {...props}>
+      <path d="M4 7h16" />
+      <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+      <path d="M6 7v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+export function UploadIcon({ filled, ...props }: IconProps) {
+  return (
+    <svg {...base} fill={filled ? "currentColor" : "none"} {...props}>
+      <path d="M12 16V4" />
+      <path d="m7.5 8.5 4.5-4.5 4.5 4.5" />
+      <path d="M5 16v2.5a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5V16" />
+    </svg>
+  );
+}
+
 export function InstagramIcon({ filled, ...props }: IconProps) {
   return (
     <svg {...base} fill={filled ? "currentColor" : "none"} {...props}>

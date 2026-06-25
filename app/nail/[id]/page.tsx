@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { TopAppBar } from "@/components/TopAppBar";
 import { GradientThumb } from "@/components/GradientThumb";
 import { NailGrid } from "@/components/NailGrid";
@@ -9,14 +10,26 @@ import { Badge } from "@/components/ui/Badge";
 import { HeartIcon } from "@/components/icons";
 import { TAG_GROUPS } from "@/lib/constants";
 import { similarNails } from "@/lib/filter";
+import { useAuth } from "@/lib/auth-client";
+import { sendLike } from "@/lib/likes";
 import { useFavorites, useLibrary } from "@/lib/store";
 
 export default function NailDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const { published: nails } = useLibrary();
   const { isFavorite, toggleFavorite } = useFavorites();
+  const { user } = useAuth();
 
   const nail = nails.find((n) => n.id === params.id);
+  const serverLikes = nail?.likeCount ?? 0;
+  const [likes, setLikes] = useState(serverLikes);
+  // Mirror the latest server count (adjusting state during render, no effect).
+  const [seenServer, setSeenServer] = useState(serverLikes);
+  if (serverLikes !== seenServer) {
+    setSeenServer(serverLikes);
+    setLikes(serverLikes);
+  }
 
   if (!nail) {
     return (
@@ -42,13 +55,24 @@ export default function NailDetailPage() {
         backHref="/"
         right={
           <button
-            onClick={() => toggleFavorite(nail.id)}
-            aria-label={fav ? "Remove from saved" : "Save"}
-            className={`flex h-9 w-9 items-center justify-center rounded-full ${
+            onClick={async () => {
+              if (!user) {
+                router.push("/account");
+                return;
+              }
+              const liking = !fav;
+              toggleFavorite(nail.id);
+              setLikes((n) => Math.max(0, n + (liking ? 1 : -1)));
+              const authoritative = await sendLike(nail.id, liking);
+              if (authoritative !== null) setLikes(authoritative);
+            }}
+            aria-label={fav ? "Unlike" : "Like"}
+            className={`flex h-9 items-center gap-1 rounded-full px-2 ${
               fav ? "text-accent" : "text-[var(--color-muted)]"
             }`}
           >
             <HeartIcon filled={fav} />
+            <span className="text-sm font-semibold tabular-nums">{likes}</span>
           </button>
         }
       />
@@ -62,6 +86,9 @@ export default function NailDetailPage() {
 
       <div className="px-4 pt-4">
         <h1 className="text-xl font-bold text-[var(--color-ink)]">{nail.title}</h1>
+        {nail.contributor && (
+          <p className="mt-1 text-sm text-[var(--color-muted)]">Shared by {nail.contributor}</p>
+        )}
 
         <div className="mt-4 flex flex-col gap-3">
           {TAG_GROUPS.map((g) => (

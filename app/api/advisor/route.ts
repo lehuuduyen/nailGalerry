@@ -1,91 +1,110 @@
 import { NextResponse } from "next/server";
+import { GROUP_BY_KEY } from "@/lib/constants";
+import { chatConfig, geminiGenerate, geminiText } from "@/lib/gemini";
 
 // ─────────────────────────────────────────────────────────────────────────
-//  POST /api/advisor  { name, age, element, elementVi, favoriteColor,
-//                       occasion, recommendedColors, picks }  ->  { reply }
+//  POST /api/advisor  { messages: {role:"user"|"bot", text}[] }
+//    ->  { reply, name?, birthYear?, favoriteColor?, occasion?, ready }
 //
-//  Writes a warm, personalised nail-stylist reply with Google Gemini. The
-//  feng-shui scoring still happens client-side; this just turns the result
-//  into natural language. Falls back to a simple template if Gemini is off.
+//  A real multi-turn stylist chat powered by Gemini. The model converses
+//  naturally while quietly gathering the four facts the feng-shui matcher
+//  needs; when it has them it sets ready=true. Falls back to a tiny scripted
+//  flow if Gemini isn't configured.
 // ─────────────────────────────────────────────────────────────────────────
 
 export const runtime = "nodejs";
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const COLORS = GROUP_BY_KEY.color.values;
+const OCCASIONS = GROUP_BY_KEY.occasion.values;
 
-type Pick = { title?: string; color?: string; style?: string; shape?: string };
+type Msg = { role: "user" | "bot"; text: string };
 
-type Body = {
-  name?: string;
-  age?: number;
-  element?: string;
-  elementVi?: string;
-  favoriteColor?: string;
-  occasion?: string;
-  recommendedColors?: string[];
-  picks?: Pick[];
+const SYSTEM =
+  "You are a warm, witty personal nail stylist chatting with a client to recommend nail " +
+  "designs. Talk like a real person: react to what they say, be brief and friendly, one " +
+  "short message at a time. Through natural conversation, learn four things: their name, " +
+  "birth year (for feng-shui), favourite colour, and the occasion they're planning for. " +
+  "Ask for whatever is still missing, conversationally — never list all questions at once. " +
+  "When you know all four, set ready=true and write a lovely closing line saying you've " +
+  "picked some designs for them below. Always reply in English.\n\n" +
+  "Return JSON with: reply (your next message to the client), and any facts gathered so far " +
+  `(name; birthYear as a 4-digit number; favoriteColor — map to one of [${COLORS.join(", ")}]; ` +
+  `occasion — map to one of [${OCCASIONS.join(", ")}]); and ready (true only once all four are known).`;
+
+const RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    reply: { type: "STRING" },
+    name: { type: "STRING" },
+    birthYear: { type: "INTEGER" },
+    favoriteColor: { type: "STRING", enum: COLORS },
+    occasion: { type: "STRING", enum: OCCASIONS },
+    ready: { type: "BOOLEAN" },
+  },
+  required: ["reply", "ready"],
+  propertyOrdering: ["reply", "name", "birthYear", "favoriteColor", "occasion", "ready"],
 };
 
-function fallbackReply(b: Body): string {
-  const name = b.name?.trim() || "there";
-  const colors = (b.recommendedColors ?? []).join(", ");
-  return (
-    `Lovely to meet you, ${name}! Your ${b.element ?? ""} element pairs beautifully with ` +
-    `${colors || "neutral"} tones. I’ve picked a few designs for your ${b.occasion ?? ""} ` +
-    `occasion and favourite colour — take a look below!`
-  );
-}
-
 export async function POST(req: Request) {
-  let body: Body;
+  let body: { messages?: Msg[] };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
+  const messages = Array.isArray(body.messages) ? body.messages : [];
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return NextResponse.json({ reply: fallbackReply(body) });
-
-  const picks = (body.picks ?? [])
-    .slice(0, 4)
-    .map((p) => `“${p.title}” (${[p.color, p.style, p.shape].filter(Boolean).join(", ")})`)
-    .join("; ");
-
-  const prompt =
-    "You are a warm, tasteful personal nail stylist. Write a SHORT reply (2-3 sentences) " +
-    "in English, friendly and personalised — address the client by name and say 'I'. " +
-    "Using their details and Chinese five-element (ngũ hành) feng shui, briefly explain why " +
-    "the picked designs suit them, then encourage them to look at the suggestions below. " +
-    "No markdown, at most one emoji.\n\n" +
-    `Name: ${body.name ?? ""}\n` +
-    `Age: ${body.age ?? ""}\n` +
-    `Element: ${body.element ?? ""}${body.elementVi ? ` (${body.elementVi})` : ""}\n` +
-    `Favourite colour: ${body.favoriteColor ?? ""}\n` +
-    `Occasion: ${body.occasion ?? ""}\n` +
-    `Harmonious colours: ${(body.recommendedColors ?? []).join(", ")}\n` +
-    `Picked designs: ${picks || "(none)"}`;
-
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.85 },
-        }),
-        signal: AbortSignal.timeout(25_000),
-      },
-    );
-    if (!res.ok) return NextResponse.json({ reply: fallbackReply(body) });
-    const data = (await res.json().catch(() => null)) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    } | null;
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    return NextResponse.json({ reply: text || fallbackReply(body) });
-  } catch {
-    return NextResponse.json({ reply: fallbackReply(body) });
+  const cfg = chatConfig();
+  if (!cfg.apiKey) {
+    return NextResponse.json({
+      reply: "Hi! I’m your personal nail stylist 💕 What should I call you?",
+      ready: false,
+    });
   }
+
+  // Gemini wants the conversation to start with a user turn — drop any leading
+  // bot/greeting messages, then map bot->model.
+  const turns = [...messages];
+  while (turns.length && turns[0].role === "bot") turns.shift();
+  const contents = turns.map((m) => ({
+    role: m.role === "user" ? "user" : "model",
+    parts: [{ text: m.text }],
+  }));
+
+  // Falls back through the model chain (e.g. to gemini-2.5-flash) on quota.
+  const text = geminiText(
+    await geminiGenerate(
+      {
+        systemInstruction: { parts: [{ text: SYSTEM }] },
+        contents,
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: RESPONSE_SCHEMA,
+          temperature: 0.85,
+        },
+      },
+      cfg,
+    ),
+  );
+
+  if (text) {
+    try {
+      const parsed = JSON.parse(text);
+      return NextResponse.json({
+        reply: typeof parsed.reply === "string" ? parsed.reply : "Tell me a little more!",
+        name: parsed.name,
+        birthYear: parsed.birthYear,
+        favoriteColor: COLORS.includes(parsed.favoriteColor) ? parsed.favoriteColor : undefined,
+        occasion: OCCASIONS.includes(parsed.occasion) ? parsed.occasion : undefined,
+        ready: Boolean(parsed.ready),
+      });
+    } catch {
+      /* fall through to canned reply */
+    }
+  }
+
+  return NextResponse.json({
+    reply: "Sorry, I lost my train of thought! Could you say that again?",
+    ready: false,
+  });
 }

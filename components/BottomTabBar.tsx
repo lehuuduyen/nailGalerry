@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ADMIN_FLAG } from "@/lib/constants";
-import { AdminIcon, HeartIcon, HomeIcon, SparkleIcon } from "./icons";
+import { AdminIcon, HeartIcon, HomeIcon, SparkleIcon, UserIcon } from "./icons";
 
 const TABS = [
   { href: "/", label: "Home", Icon: HomeIcon },
   { href: "/favorites", label: "Saved", Icon: HeartIcon },
   { href: "/advisor", label: "Advisor", Icon: SparkleIcon },
+  { href: "/account", label: "Account", Icon: UserIcon },
   { href: "/admin", label: "Admin", Icon: AdminIcon },
 ] as const;
 

@@ -6,22 +6,34 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "migrate:inspect": "tsx migrate/inspect.ts",
+    "migrate:ddl": "tsx migrate/run-ddl.ts",
+    "migrate:run": "tsx migrate/migrate.ts",
+    "migrate:normalize": "tsx migrate/normalize.ts",
+    "migrate:enrich": "tsx migrate/enrich.ts",
+    "migrate:verify": "tsx migrate/verify.ts"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "aws4fetch": "^1.0.20",
     "next": "16.2.7",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.7",
+    "pg": "^8.22.0",
     "tailwindcss": "^4",
+    "tsx": "^4.22.4",
     "typescript": "^5"
   }
 }

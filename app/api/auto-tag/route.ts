@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { TAG_GROUPS } from "@/lib/constants";
+import { geminiGenerate, geminiText, tagConfig } from "@/lib/gemini";
 
 // ─────────────────────────────────────────────────────────────────────────
 //  POST /api/auto-tag  { imageUrl, caption? }  ->  { tags }
@@ -17,8 +18,6 @@ import { TAG_GROUPS } from "@/lib/constants";
 // ─────────────────────────────────────────────────────────────────────────
 
 export const runtime = "nodejs";
-
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 // Build the response schema once: an object with one enum-constrained string
 // per tag group, so Gemini can only return values we actually support. An
@@ -65,8 +64,8 @@ const PROMPT =
   ).join("\n");
 
 export async function POST(req: Request) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  const cfg = tagConfig();
+  if (!cfg.apiKey) {
     return NextResponse.json({ error: "Gemini is not configured." }, { status: 501 });
   }
 
@@ -109,53 +108,23 @@ export async function POST(req: Request) {
     { inline_data: { mime_type: mimeType, data: base64 } },
   ];
 
-  const payload = JSON.stringify({
-    contents: [{ parts }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
-      temperature: 0,
-    },
-  });
-
-  // Gemini occasionally returns 503 (high demand) or 429 — retry a couple times
-  // with a short backoff so a transient blip doesn't fall back to random tags.
-  let geminiRes: Response | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          body: payload,
-          signal: AbortSignal.timeout(30_000),
+  // Falls back through the model chain (e.g. to gemini-2.5-flash) on quota.
+  const text = geminiText(
+    await geminiGenerate(
+      {
+        contents: [{ parts }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: RESPONSE_SCHEMA,
+          temperature: 0,
         },
-      );
-    } catch {
-      return NextResponse.json({ error: "Gemini request failed." }, { status: 504 });
-    }
-    if (geminiRes.status !== 503 && geminiRes.status !== 429) break;
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
-  }
-  if (!geminiRes) {
-    return NextResponse.json({ error: "Gemini request failed." }, { status: 504 });
-  }
-
-  if (!geminiRes.ok) {
-    const detail = await geminiRes.text().catch(() => "");
-    return NextResponse.json(
-      { error: `Gemini error (${geminiRes.status}). ${detail.slice(0, 160)}` },
-      { status: 502 },
-    );
-  }
-
-  const data = (await geminiRes.json().catch(() => null)) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  } | null;
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      },
+      cfg,
+      30_000,
+    ),
+  );
   if (!text) {
-    return NextResponse.json({ error: "Empty response from Gemini." }, { status: 502 });
+    return NextResponse.json({ error: "Gemini unavailable." }, { status: 502 });
   }
 
   let parsed: Record<string, unknown>;

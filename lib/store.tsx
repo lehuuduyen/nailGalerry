@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { autoTagImage } from "./ai";
+import { AuthProvider } from "./auth-client";
 import { TAG_GROUPS } from "./constants";
 import { isInstagramCdn } from "./img";
 import { INSTAGRAM_POOL } from "./mock-data";
@@ -75,6 +76,8 @@ type LibraryContextValue = {
   nails: Nail[];
   /** Approved items only — what visitors see in the public gallery. */
   published: Nail[];
+  /** Re-fetch the catalog from the server (fresh images + like counts). */
+  refresh: () => Promise<void>;
   /** Import a single post by URL: uploads the image to R2, adds it as pending. */
   importFromUrl: (url: string) => Promise<ImportOutcome>;
   /** Import recent posts from a profile: uploads images to R2, adds as pending. */
@@ -139,6 +142,18 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (hydrated) save(LS_IMPORTS, importCount);
   }, [importCount, hydrated]);
+
+  // Re-fetch the catalog from the server (fresh images + like counts). Called
+  // on the initial hydrate and whenever the user lands on the Home tab.
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch("/api/catalog", { cache: "no-store" });
+      const d = await r.json();
+      if (Array.isArray(d.nails)) setNails(d.nails as Nail[]);
+    } catch {
+      /* keep current data on a refresh hiccup */
+    }
+  }, []);
 
   // Persist the catalog to R2 so every browser sees the same thing.
   const saveCatalog = useCallback((next: Nail[]) => {
@@ -374,6 +389,7 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
     () => ({
       nails,
       published,
+      refresh,
       importFromUrl,
       importProfile,
       importSamplePosts,
@@ -388,6 +404,7 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
     [
       nails,
       published,
+      refresh,
       importFromUrl,
       importProfile,
       importSamplePosts,
@@ -459,8 +476,10 @@ export function useFavorites(): FavoritesContextValue {
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   return (
-    <LibraryProvider>
-      <FavoritesProvider>{children}</FavoritesProvider>
-    </LibraryProvider>
+    <AuthProvider>
+      <LibraryProvider>
+        <FavoritesProvider>{children}</FavoritesProvider>
+      </LibraryProvider>
+    </AuthProvider>
   );
 }

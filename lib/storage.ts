@@ -46,19 +46,35 @@ function r2Endpoint(key: string): string {
  */
 export async function uploadToR2(
   key: string,
-  body: ArrayBuffer,
+  body: ArrayBuffer | Uint8Array,
   contentType: string,
   cacheControl = "public, max-age=31536000, immutable",
 ): Promise<string> {
   if (!isStorageConfigured()) throw new Error("R2 storage is not configured.");
 
+  // Normalise to a plain ArrayBuffer of exactly the bytes we mean to send. For a
+  // Uint8Array we slice by its offset/length (a base64-decoded Buffer can be a
+  // view into a larger pooled buffer). R2 also rejects PUTs sent with chunked
+  // transfer encoding (411 MissingContentLength), and inside the Next.js runtime
+  // fetch won't auto-set Content-Length for a raw body — so we set it explicitly.
+  const payload: ArrayBuffer =
+    body instanceof Uint8Array
+      ? (body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer)
+      : body;
+
   const res = await r2Client().fetch(r2Endpoint(key), {
     method: "PUT",
-    body,
-    headers: { "Content-Type": contentType, "Cache-Control": cacheControl },
+    body: payload,
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": cacheControl,
+      "Content-Length": String(payload.byteLength),
+    },
   });
 
   if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.error(`[R2] PUT ${key} failed ${res.status}: ${detail.slice(0, 400)}`);
     throw new Error(`R2 upload failed (${res.status}).`);
   }
 
