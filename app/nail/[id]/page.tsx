@@ -80,7 +80,8 @@ export default function NailDetailPage() {
       <GradientThumb
         seed={nail.id}
         imageUrl={nail.imageUrl}
-        alt={nail.title}
+        alt={nail.altText ?? nail.title}
+        width={800}
         className="aspect-[4/5] w-full"
       />
 

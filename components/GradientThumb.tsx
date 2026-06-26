@@ -1,11 +1,13 @@
 import { gradientFor } from "@/lib/gradient";
-import { displaySrc } from "@/lib/img";
+import { resolveImageSrc } from "@/lib/imageUrl";
 
 type Props = {
   seed: string;
   imageUrl?: string;
   alt?: string;
   className?: string;
+  /** Target render width — hints CDN image resizing (cards ~400px). */
+  width?: number;
   children?: React.ReactNode;
 };
 
@@ -16,14 +18,17 @@ type Props = {
  * external CDN URL (Instagram), which would otherwise need next/image remote
  * domain config and can expire.
  */
-export function GradientThumb({ seed, imageUrl, alt = "", className = "", children }: Props) {
+export function GradientThumb({ seed, imageUrl, alt = "", className = "", width, children }: Props) {
+  const src = resolveImageSrc(imageUrl, width ? { width } : undefined);
   return (
     <div className={`relative overflow-hidden ${className}`} style={{ background: gradientFor(seed) }}>
-      {imageUrl ? (
+      {src ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={displaySrc(imageUrl)}
+          src={src}
           alt={alt}
+          loading="lazy"
+          decoding="async"
           className="absolute inset-0 h-full w-full object-cover"
         />
       ) : (

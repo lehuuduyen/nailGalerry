@@ -33,6 +33,10 @@ export type Source = InstagramSource | UserSource;
 export type Nail = NailTags & {
   id: string;
   title: string;
+  /** SEO slug (from the DB), used for shareable URLs. */
+  slug?: string;
+  /** SEO/accessibility alt text for the image (from the DB). */
+  altText?: string;
   /** Optional real image URL (e.g. an uploaded object URL). Absent => gradient placeholder. */
   imageUrl?: string;
   source: Source;

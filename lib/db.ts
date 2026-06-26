@@ -57,6 +57,8 @@ type DesignRow = {
   status: string | null;
   caption: string | null;
   like_count: number | string | null;
+  slug: string | null;
+  alt_text: string | null;
 };
 
 function rowToNail(r: DesignRow): Nail {
@@ -71,6 +73,8 @@ function rowToNail(r: DesignRow): Nail {
   return {
     id: r.id,
     title: r.title ?? "",
+    slug: r.slug ?? undefined,
+    altText: r.alt_text ?? undefined,
     ...tags,
     imageUrl: r.image_url ?? undefined,
     caption: r.caption ?? undefined,
@@ -88,6 +92,56 @@ export async function getAllDesigns(): Promise<Nail[]> {
     SELECT * FROM designs ORDER BY created_at DESC NULLS LAST, id
   `) as DesignRow[];
   return rows.map(rowToNail);
+}
+
+// ── Cursor pagination (for the Home grid / future infinite scroll) ──────────
+// Cursor = (created_at, id) of the last row, so it stays stable as rows are
+// added (offset pagination would shift). Only the columns a card + the current
+// client-side filters need are selected — never the heavy `description`.
+
+export type DesignsPage = { items: Nail[]; nextCursor: string | null };
+
+function encodeCursor(createdAt: string | Date, id: string): string {
+  const iso = createdAt instanceof Date ? createdAt.toISOString() : new Date(createdAt).toISOString();
+  return Buffer.from(`${iso}|${id}`).toString("base64url");
+}
+
+function decodeCursor(cursor: string): { createdAt: string; id: string } | null {
+  try {
+    const [iso, id] = Buffer.from(cursor, "base64url").toString().split("|");
+    return iso && id ? { createdAt: iso, id } : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getDesignsPage(limit = 24, cursor?: string): Promise<DesignsPage> {
+  const lim = Math.min(Math.max(Math.trunc(limit) || 24, 1), 60);
+  const cur = cursor ? decodeCursor(cursor) : null;
+  const rows = (cur
+    ? await db()`
+        SELECT id, title, slug, image_url, alt_text, contributor,
+               color, style, shape, length, occasion, mood, technique, detail,
+               like_count, status, created_at
+        FROM designs
+        WHERE status <> 'pending'
+          AND (created_at, id) < (${cur.createdAt}::timestamptz, ${cur.id})
+        ORDER BY created_at DESC, id DESC
+        LIMIT ${lim + 1}`
+    : await db()`
+        SELECT id, title, slug, image_url, alt_text, contributor,
+               color, style, shape, length, occasion, mood, technique, detail,
+               like_count, status, created_at
+        FROM designs
+        WHERE status <> 'pending'
+        ORDER BY created_at DESC, id DESC
+        LIMIT ${lim + 1}`) as (DesignRow & { created_at: string })[];
+
+  const hasMore = rows.length > lim;
+  const page = rows.slice(0, lim);
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? encodeCursor(last.created_at, last.id) : null;
+  return { items: page.map(rowToNail), nextCursor };
 }
 
 /** Designs uploaded by a given user, newest first. */

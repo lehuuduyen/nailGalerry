@@ -13,11 +13,16 @@ import type { Nail } from "@/lib/types";
 
 export const runtime = "nodejs";
 
+// CDN cache: serve repeat gallery reads from the edge for 5 min (likes/new
+// approvals propagate within that window) and keep serving stale up to 10 min
+// while revalidating — cuts origin DB hits and speeds up Home.
+const CACHE_HEADER = "public, s-maxage=300, stale-while-revalidate=600";
+
 export async function GET() {
   if (!isDbConfigured()) return NextResponse.json({ nails: [] });
   try {
     const nails = await getAllDesigns();
-    return NextResponse.json({ nails });
+    return NextResponse.json({ nails }, { headers: { "Cache-Control": CACHE_HEADER } });
   } catch {
     // Never hard-fail the gallery on a DB hiccup — show empty instead.
     return NextResponse.json({ nails: [] });

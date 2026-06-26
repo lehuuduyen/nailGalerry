@@ -147,7 +147,9 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
   // on the initial hydrate and whenever the user lands on the Home tab.
   const refresh = useCallback(async () => {
     try {
-      const r = await fetch("/api/catalog", { cache: "no-store" });
+      // Default caching: the response is CDN-cacheable (s-maxage=300), so
+      // repeat Home visits are cheap; like counts refresh within ~5 min.
+      const r = await fetch("/api/catalog");
       const d = await r.json();
       if (Array.isArray(d.nails)) setNails(d.nails as Nail[]);
     } catch {

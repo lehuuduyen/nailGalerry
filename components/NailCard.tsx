@@ -48,7 +48,13 @@ export function NailCard({ nail, score }: { nail: Nail; score?: number }) {
       className="group block overflow-hidden rounded-3xl bg-white shadow-[var(--shadow-card)] transition-transform active:scale-[0.98]"
     >
       <div className="relative">
-        <GradientThumb seed={nail.id} imageUrl={nail.imageUrl} alt={nail.title} className="aspect-[4/5]" />
+        <GradientThumb
+          seed={nail.id}
+          imageUrl={nail.imageUrl}
+          alt={nail.altText ?? nail.title}
+          width={400}
+          className="aspect-[4/5]"
+        />
 
         <button
           type="button"
