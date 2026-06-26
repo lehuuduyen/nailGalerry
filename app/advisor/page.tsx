@@ -45,10 +45,17 @@ export default function AdvisorPage() {
       ready?: boolean;
     } = {};
     try {
+      // Only send real chat turns — strip the inline "result" markers (they
+      // have no text and would break the model request).
+      const payload = history
+        .filter((m): m is { role: "bot" | "user"; text: string } =>
+          m.role !== "result" && typeof m.text === "string" && m.text.trim().length > 0,
+        )
+        .map((m) => ({ role: m.role, text: m.text }));
       const res = await fetch("/api/advisor", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history }),
+        body: JSON.stringify({ messages: payload }),
       });
       data = await res.json();
     } catch {

@@ -62,9 +62,10 @@ export async function POST(req: Request) {
     });
   }
 
-  // Gemini wants the conversation to start with a user turn — drop any leading
-  // bot/greeting messages, then map bot->model.
-  const turns = [...messages];
+  // Keep only turns with real text (guards against any marker/empty messages),
+  // then drop leading bot/greeting turns (Gemini wants a user turn first) and
+  // map bot->model.
+  const turns = messages.filter((m) => typeof m.text === "string" && m.text.trim().length > 0);
   while (turns.length && turns[0].role === "bot") turns.shift();
   const contents = turns.map((m) => ({
     role: m.role === "user" ? "user" : "model",
