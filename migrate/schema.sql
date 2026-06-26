@@ -82,3 +82,13 @@ CREATE INDEX IF NOT EXISTS idx_designs_season    ON designs(season);
 CREATE INDEX IF NOT EXISTS idx_designs_skin_tone ON designs(skin_tone);
 CREATE INDEX IF NOT EXISTS idx_designs_origin    ON designs(style_origin);
 CREATE INDEX IF NOT EXISTS idx_designs_accent    ON designs USING GIN (accent_colors);
+
+-- AI Advisor conversation state, so a refresh doesn't restart the chat.
+-- id = `u:<userId>` for signed-in users, or `g:<cookie-sid>` for guests.
+CREATE TABLE IF NOT EXISTS advisor_sessions (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT,
+  filters    JSONB DEFAULT '{}',
+  turns      JSONB DEFAULT '[]',
+  updated_at TIMESTAMPTZ DEFAULT now()
+);

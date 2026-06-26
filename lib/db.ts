@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless";
+import { RELAX_ORDER, type AdvisorFilters, type FilterField } from "./taxonomy";
 import type { Nail, NailTags, Source, TagKey } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -142,6 +143,115 @@ export async function getDesignsPage(limit = 24, cursor?: string): Promise<Desig
   const last = page[page.length - 1];
   const nextCursor = hasMore && last ? encodeCursor(last.created_at, last.id) : null;
   return { items: page.map(rowToNail), nextCursor };
+}
+
+// ── Advisor: filtered query + session state ─────────────────────────────────
+
+/** Resolve designs by id, preserving the given order (for restoring grids). */
+export async function getDesignsByIds(ids: string[]): Promise<Nail[]> {
+  if (!ids.length) return [];
+  const rows = (await db()`
+    SELECT id, title, slug, image_url, alt_text, contributor,
+           color, style, shape, length, occasion, mood, technique, detail, like_count
+    FROM designs WHERE id = ANY(${ids}::text[])
+  `) as DesignRow[];
+  const byId = new Map(rows.map((r) => [r.id, rowToNail(r)]));
+  return ids.map((id) => byId.get(id)).filter((n): n is Nail => Boolean(n));
+}
+
+// One fixed, fully-parameterised query — absent filters pass `null` and become
+// no-ops (`null::text IS NULL`), so we never build SQL strings dynamically.
+async function runDesignQuery(f: AdvisorFilters, limit: number): Promise<Nail[]> {
+  const accent = f.accent_colors && f.accent_colors.length ? f.accent_colors : null;
+  const rows = (await db()`
+    SELECT id, title, slug, image_url, alt_text, contributor,
+           color, style, shape, length, occasion, mood, technique, detail, like_count
+    FROM designs
+    WHERE status <> 'pending'
+      AND (${f.occasion ?? null}::text IS NULL OR occasion = ${f.occasion ?? null})
+      AND (${f.color ?? null}::text IS NULL OR color = ${f.color ?? null})
+      AND (${f.skin_tone ?? null}::text IS NULL OR skin_tone = ${f.skin_tone ?? null})
+      AND (${f.undertone ?? null}::text IS NULL OR undertone = ${f.undertone ?? null})
+      AND (${f.season ?? null}::text IS NULL OR season = ${f.season ?? null})
+      AND (${f.style ?? null}::text IS NULL OR style = ${f.style ?? null})
+      AND (${f.style_origin ?? null}::text IS NULL OR style_origin = ${f.style_origin ?? null})
+      AND (${f.shape ?? null}::text IS NULL OR shape = ${f.shape ?? null})
+      AND (${f.length ?? null}::text IS NULL OR length = ${f.length ?? null})
+      AND (${f.mood ?? null}::text IS NULL OR mood = ${f.mood ?? null})
+      AND (${f.technique ?? null}::text IS NULL OR technique = ${f.technique ?? null})
+      AND (${f.detail ?? null}::text IS NULL OR detail = ${f.detail ?? null})
+      AND (${accent}::text[] IS NULL OR accent_colors && ${accent}::text[])
+    ORDER BY like_count DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+    LIMIT ${limit}
+  `) as DesignRow[];
+  return rows.map(rowToNail);
+}
+
+export type QueryResult = { items: Nail[]; dropped: FilterField[] };
+
+/**
+ * Query designs by the advisor's filters. If the exact match returns < 4, drop
+ * the least-important tags one at a time (RELAX_ORDER) until there are enough —
+ * returning which tags were dropped so the reply can be honest about it.
+ */
+export async function queryDesigns(filters: AdvisorFilters, limit = 16): Promise<QueryResult> {
+  let f: AdvisorFilters = { ...filters };
+  const dropped: FilterField[] = [];
+  for (;;) {
+    const items = await runDesignQuery(f, limit);
+    if (items.length >= 4) return { items, dropped };
+    const next = RELAX_ORDER.find((k) => {
+      const v = f[k];
+      return Array.isArray(v) ? v.length > 0 : v != null;
+    });
+    if (!next) return { items, dropped }; // nothing left to relax
+    f = { ...f };
+    delete f[next];
+    dropped.push(next);
+  }
+}
+
+export type AdvisorTurn = { role: "user" | "bot"; text: string; gridDesignIds?: string[] };
+export type AdvisorSessionRow = {
+  id: string;
+  userId: string | null;
+  filters: AdvisorFilters;
+  turns: AdvisorTurn[];
+};
+
+export async function getAdvisorSession(id: string): Promise<AdvisorSessionRow | null> {
+  const rows = (await db()`
+    SELECT id, user_id, filters, turns FROM advisor_sessions WHERE id = ${id}
+  `) as { id: string; user_id: string | null; filters: AdvisorFilters; turns: AdvisorTurn[] }[];
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: r.id,
+    userId: r.user_id,
+    filters: r.filters ?? {},
+    turns: Array.isArray(r.turns) ? r.turns : [],
+  };
+}
+
+export async function saveAdvisorSession(
+  id: string,
+  userId: string | null,
+  filters: AdvisorFilters,
+  turns: AdvisorTurn[],
+): Promise<void> {
+  await db()`
+    INSERT INTO advisor_sessions (id, user_id, filters, turns, updated_at)
+    VALUES (${id}, ${userId}, ${JSON.stringify(filters)}::jsonb, ${JSON.stringify(turns)}::jsonb, now())
+    ON CONFLICT (id) DO UPDATE SET
+      user_id = EXCLUDED.user_id,
+      filters = EXCLUDED.filters,
+      turns = EXCLUDED.turns,
+      updated_at = now()
+  `;
+}
+
+export async function clearAdvisorSession(id: string): Promise<void> {
+  await db()`DELETE FROM advisor_sessions WHERE id = ${id}`;
 }
 
 /** Designs uploaded by a given user, newest first. */

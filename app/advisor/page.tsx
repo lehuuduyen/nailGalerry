@@ -3,114 +3,96 @@
 import { useEffect, useRef, useState } from "react";
 import { TopAppBar } from "@/components/TopAppBar";
 import { NailGrid } from "@/components/NailGrid";
-import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { chatAdvisor, type AdvisorProfile, type AdvisorResult } from "@/lib/ai";
-import { ELEMENT_VI } from "@/lib/fengshui";
-import { useLibrary } from "@/lib/store";
+import type { Nail } from "@/lib/types";
 
-// A "result" message renders a recommendations grid inline at that point in
-// the conversation (carrying its own snapshot, so refinements pin a NEW grid
-// below rather than mutating an earlier one).
-type Message =
-  | { role: "bot" | "user"; text: string }
-  | { role: "result"; result: AdvisorResult };
+// The conversation is stored server-side (Neon). Each bot turn may pin a grid
+// of REAL designs; we just render what the server returns.
+type Turn = { role: "user" | "bot"; text: string; designs?: Nail[] };
 
-const GREETING = "Hi! I’m your personal nail stylist 💕 What should I call you?";
+function greeting(username?: string | null): Turn {
+  return {
+    role: "bot",
+    text: `Hi ${username ? username : "there"}! I'm your personal nail stylist 💕 What's the occasion you're getting your nails done for (party, wedding, work, everyday…)? You can chat in English, Tiếng Việt, or Español.`,
+  };
+}
 
 export default function AdvisorPage() {
-  const { published: nails } = useLibrary();
-  const [messages, setMessages] = useState<Message[]>([{ role: "bot", text: GREETING }]);
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [username, setUsername] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [profile, setProfile] = useState<Partial<AdvisorProfile>>({});
-  // Last recommendations shown — used to detect when picks change + for UI state.
-  const [lastResult, setLastResult] = useState<AdvisorResult | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  // Restore the conversation from the server on mount (survives refresh).
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/advisor");
+        const data = await res.json().catch(() => ({}));
+        if (!active) return;
+        setUsername(data.username ?? null);
+        setTurns(
+          Array.isArray(data.turns) && data.turns.length ? data.turns : [greeting(data.username)],
+        );
+      } catch {
+        if (active) setTurns([greeting()]);
+      } finally {
+        if (active) setLoaded(true);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+  }, [turns, loading]);
 
   async function send() {
     const text = draft.trim();
     if (!text || loading) return;
-    const history: Message[] = [...messages, { role: "user", text }];
-    setMessages(history);
+    setTurns((t) => [...t, { role: "user", text }]);
     setDraft("");
     setLoading(true);
-
-    let data: {
-      reply?: string;
-      name?: string;
-      birthYear?: number;
-      favoriteColor?: string;
-      occasion?: string;
-      length?: string;
-      shape?: string;
-      style?: string;
-      ready?: boolean;
-    } = {};
     try {
-      // Only send real chat turns — strip the inline "result" markers (they
-      // have no text and would break the model request).
-      const payload = history
-        .filter((m): m is { role: "bot" | "user"; text: string } =>
-          m.role !== "result" && typeof m.text === "string" && m.text.trim().length > 0,
-        )
-        .map((m) => ({ role: m.role, text: m.text }));
       const res = await fetch("/api/advisor", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: payload }),
+        body: JSON.stringify({ message: text }),
       });
-      data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      setTurns((t) => [
+        ...t,
+        {
+          role: "bot",
+          text: data.reply ?? "Sorry, I didn't catch that — could you say it again? 💕",
+          designs: Array.isArray(data.designs) ? data.designs : undefined,
+        },
+      ]);
     } catch {
-      data = { reply: "Sorry, I had a hiccup — could you try again?" };
-    }
-    setLoading(false);
-
-    setMessages((m) => [...m, { role: "bot", text: data.reply ?? "Tell me a little more!" }]);
-
-    // Merge any facts/refinements the model gathered this turn.
-    const merged: Partial<AdvisorProfile> = {
-      name: data.name ?? profile.name,
-      birthYear: data.birthYear ?? profile.birthYear,
-      favoriteColor: data.favoriteColor ?? profile.favoriteColor,
-      occasion: data.occasion ?? profile.occasion,
-      length: data.length ?? profile.length,
-      shape: data.shape ?? profile.shape,
-      style: data.style ?? profile.style,
-    };
-    setProfile(merged);
-
-    // Once the core profile is complete, (re)compute recommendations. Pin a new
-    // grid only when the picks actually change — so the first reveal and each
-    // refinement ("short nails", etc.) appear as a fresh grid below the chat.
-    if (
-      data.ready &&
-      merged.name &&
-      merged.birthYear &&
-      merged.favoriteColor &&
-      merged.occasion
-    ) {
-      const next = chatAdvisor(merged as AdvisorProfile, nails);
-      const sameAsLast =
-        lastResult &&
-        lastResult.recommendations.map((r) => r.nail.id).join() ===
-          next.recommendations.map((r) => r.nail.id).join();
-      if (!sameAsLast) {
-        setLastResult(next);
-        setMessages((m) => [...m, { role: "result", result: next }]);
-      }
+      setTurns((t) => [
+        ...t,
+        { role: "bot", text: "Network hiccup — please try again 🥲" },
+      ]);
+    } finally {
+      setLoading(false);
     }
   }
 
-  function restart() {
-    setMessages([{ role: "bot", text: GREETING }]);
+  async function restart() {
+    setLoading(true);
+    try {
+      await fetch("/api/advisor", { method: "DELETE" });
+    } catch {
+      /* ignore */
+    }
+    setTurns([greeting(username)]);
     setDraft("");
-    setProfile({});
-    setLastResult(null);
+    setLoading(false);
   }
 
   return (
@@ -119,16 +101,18 @@ export default function AdvisorPage() {
 
       <div className="flex-1 px-4 py-4">
         <div className="flex flex-col gap-3">
-          {messages.map((m, i) =>
-            m.role === "result" ? (
-              <ResultBlock key={i} result={m.result} />
+          {turns.map((t, i) =>
+            t.role === "bot" ? (
+              <div key={i} className="flex flex-col gap-3">
+                <Bubble role="bot" text={t.text} />
+                {t.designs && t.designs.length > 0 && <NailGrid nails={t.designs} />}
+              </div>
             ) : (
-              <Bubble key={i} role={m.role} text={m.text} />
+              <Bubble key={i} role="user" text={t.text} />
             ),
           )}
-          {loading && <Typing />}
+          {(loading || !loaded) && <Typing />}
         </div>
-
         <div ref={endRef} />
       </div>
 
@@ -138,14 +122,13 @@ export default function AdvisorPage() {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              // Ignore Enter while an IME (e.g. Vietnamese) is still composing —
-              // otherwise the half-typed text stays in the box after sending.
+              // Ignore Enter while an IME (e.g. Vietnamese) is composing.
               if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 send();
               }
             }}
-            placeholder={lastResult ? "Ask me anything else…" : "Type your reply…"}
+            placeholder="Tell me what you're looking for…"
             className="h-11 flex-1 rounded-full border border-[var(--color-line)] bg-white px-4 text-sm outline-none focus:border-accent"
             autoFocus
           />
@@ -153,7 +136,7 @@ export default function AdvisorPage() {
             Send
           </Button>
         </div>
-        {lastResult && (
+        {turns.length > 1 && (
           <button
             type="button"
             onClick={restart}
@@ -162,33 +145,6 @@ export default function AdvisorPage() {
             Start over
           </button>
         )}
-      </div>
-    </div>
-  );
-}
-
-function ResultBlock({ result }: { result: AdvisorResult }) {
-  return (
-    <div>
-      <div className="rounded-3xl bg-white p-4 shadow-[var(--shadow-card)]">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge tone="solid">Age {result.age}</Badge>
-          <Badge tone="soft">
-            Element: {result.element} ({ELEMENT_VI[result.element]})
-          </Badge>
-        </div>
-        <p className="mt-3 text-xs font-semibold text-[var(--color-muted)]">Harmonious colors</p>
-        <div className="mt-1.5 flex flex-wrap gap-2">
-          {result.recommendedColors.map((c) => (
-            <Badge key={c} tone="outline">
-              {c}
-            </Badge>
-          ))}
-        </div>
-      </div>
-      <div className="mt-3">
-        <h2 className="text-sm font-bold text-[var(--color-ink)]">Picked for you</h2>
-        <NailGrid scored={result.recommendations} />
       </div>
     </div>
   );
