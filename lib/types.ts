@@ -37,6 +37,8 @@ export type Nail = NailTags & {
   slug?: string;
   /** SEO/accessibility alt text for the image (from the DB). */
   altText?: string;
+  /** Long-form SEO description (from the DB); only loaded on the design page. */
+  description?: string;
   /** Optional real image URL (e.g. an uploaded object URL). Absent => gradient placeholder. */
   imageUrl?: string;
   source: Source;

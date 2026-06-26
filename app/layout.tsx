@@ -3,6 +3,7 @@ import { Geist } from "next/font/google";
 import "./globals.css";
 import { AppProviders } from "@/lib/store";
 import { AppShell } from "@/components/AppShell";
+import { SITE_NAME, SITE_URL } from "@/lib/site";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -10,9 +11,14 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "NailLib — Nail design library",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: `${SITE_NAME} — Nail design gallery & ideas`,
+    template: `%s · ${SITE_NAME}`,
+  },
   description:
-    "Browse nail designs by multi-dimensional tags and get AI-personalized recommendations.",
+    "Browse nail designs by color, shape, length and occasion, and get AI-personalized recommendations.",
+  openGraph: { siteName: SITE_NAME, type: "website" },
 };
 
 export const viewport: Viewport = {

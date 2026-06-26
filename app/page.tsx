@@ -1,57 +1,27 @@
-"use client";
-
-import { useEffect, useState } from "react";
+import type { Metadata } from "next";
 import { TopAppBar } from "@/components/TopAppBar";
-import { SearchBar } from "@/components/SearchBar";
-import { ActiveFilters } from "@/components/ActiveFilters";
-import { FilterSheet } from "@/components/FilterSheet";
-import { NailGrid } from "@/components/NailGrid";
-import { countActive, EMPTY_FILTERS, useNailFilter, type FilterState } from "@/lib/filter";
-import { useLibrary } from "@/lib/store";
+import { HomeGallery } from "@/components/HomeGallery";
+import { getPublishedDesigns } from "@/lib/db";
 
-export default function HomePage() {
-  const { published: nails, refresh } = useLibrary();
-  const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
-  const [sheetOpen, setSheetOpen] = useState(false);
+// Server-rendered home (ISR, 5 min). The design grid is fetched from Neon and
+// rendered into the initial HTML so search engines see real content + links to
+// every /designs/[slug] page.
+export const revalidate = 300;
 
-  // Re-fetch fresh images + like counts every time the Home tab is opened.
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+export const metadata: Metadata = {
+  title: { absolute: "NailLib — Nail Design Library with AI Recommendations" },
+  description:
+    "Browse 500+ nail designs filtered by color, shape, style & occasion. Get AI-powered nail recommendations tailored to you.",
+  alternates: { canonical: "/" },
+};
 
-  const results = useNailFilter(nails, filters, query);
+export default async function HomePage() {
+  const nails = await getPublishedDesigns().catch(() => []);
 
   return (
     <div>
       <TopAppBar brand />
-
-      <SearchBar
-        query={query}
-        onQueryChange={setQuery}
-        activeCount={countActive(filters)}
-        onOpenFilter={() => setSheetOpen(true)}
-      />
-
-      <ActiveFilters filters={filters} setFilters={setFilters} />
-
-      <div className="px-4 pt-1 text-xs text-[var(--color-muted)]">
-        {results.length} {results.length === 1 ? "design" : "designs"}
-      </div>
-
-      <NailGrid
-        nails={results}
-        emptyTitle="No designs match"
-        emptyHint="Try removing a filter or clearing your search."
-      />
-
-      <FilterSheet
-        open={sheetOpen}
-        onClose={() => setSheetOpen(false)}
-        filters={filters}
-        setFilters={setFilters}
-        resultCount={results.length}
-      />
+      <HomeGallery initialNails={nails} />
     </div>
   );
 }

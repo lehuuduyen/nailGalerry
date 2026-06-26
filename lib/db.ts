@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless";
+import { buildSlug } from "./slug";
 import { RELAX_ORDER, type AdvisorFilters, type FilterField } from "./taxonomy";
 import type { Nail, NailTags, Source, TagKey } from "./types";
 
@@ -60,6 +61,7 @@ type DesignRow = {
   like_count: number | string | null;
   slug: string | null;
   alt_text: string | null;
+  description: string | null;
 };
 
 function rowToNail(r: DesignRow): Nail {
@@ -76,6 +78,7 @@ function rowToNail(r: DesignRow): Nail {
     title: r.title ?? "",
     slug: r.slug ?? undefined,
     altText: r.alt_text ?? undefined,
+    description: r.description ?? undefined,
     ...tags,
     imageUrl: r.image_url ?? undefined,
     caption: r.caption ?? undefined,
@@ -93,6 +96,39 @@ export async function getAllDesigns(): Promise<Nail[]> {
     SELECT * FROM designs ORDER BY created_at DESC NULLS LAST, id
   `) as DesignRow[];
   return rows.map(rowToNail);
+}
+
+/** Approved designs only (the public gallery), newest first. */
+export async function getPublishedDesigns(): Promise<Nail[]> {
+  const rows = (await db()`
+    SELECT * FROM designs WHERE status <> 'pending'
+    ORDER BY like_count DESC NULLS LAST, created_at DESC NULLS LAST, id
+  `) as DesignRow[];
+  return rows.map(rowToNail);
+}
+
+/** One approved design by its SEO slug (incl. description for the page). */
+export async function getDesignBySlug(slug: string): Promise<Nail | null> {
+  const rows = (await db()`
+    SELECT * FROM designs WHERE slug = ${slug} AND status <> 'pending' LIMIT 1
+  `) as DesignRow[];
+  return rows[0] ? rowToNail(rows[0]) : null;
+}
+
+/** All approved slugs (for generateStaticParams + sitemap). */
+export async function getPublishedSlugs(): Promise<string[]> {
+  const rows = (await db()`
+    SELECT slug FROM designs WHERE status <> 'pending' AND slug IS NOT NULL
+  `) as { slug: string }[];
+  return rows.map((r) => r.slug);
+}
+
+/** Resolve a design's slug from its id (for redirecting old /nail/[id] URLs). */
+export async function getSlugById(id: string): Promise<string | null> {
+  const rows = (await db()`
+    SELECT slug FROM designs WHERE id = ${id} LIMIT 1
+  `) as { slug: string | null }[];
+  return rows[0]?.slug ?? null;
 }
 
 // ── Cursor pagination (for the Home grid / future infinite scroll) ──────────
@@ -263,15 +299,16 @@ export async function getDesignsByOwner(ownerId: string): Promise<Nail[]> {
   return rows.map(rowToNail);
 }
 
-/** Insert one design (used by uploads/imports). */
+/** Insert one design (used by uploads/imports). Generates a slug if missing. */
 export async function insertDesign(n: Nail): Promise<void> {
+  const slug = n.slug ?? buildSlug(n);
   await db()`
     INSERT INTO designs (
-      id, title, style, color, shape, length, occasion, mood, technique, detail,
+      id, title, slug, style, color, shape, length, occasion, mood, technique, detail,
       image_url, contributor, owner_id, source_platform, source_handle, source_url,
       status, caption
     ) VALUES (
-      ${n.id}, ${n.title ?? null}, ${n.style ?? null}, ${n.color ?? null},
+      ${n.id}, ${n.title ?? null}, ${slug}, ${n.style ?? null}, ${n.color ?? null},
       ${n.shape ?? null}, ${n.length ?? null}, ${n.occasion ?? null}, ${n.mood ?? null},
       ${n.technique ?? null}, ${n.detail ?? null}, ${n.imageUrl ?? null},
       ${n.contributor ?? null}, ${n.ownerId ?? null}, ${n.source?.platform ?? null},
@@ -289,14 +326,15 @@ export async function insertDesign(n: Nail): Promise<void> {
  */
 export async function replaceCatalog(nails: Nail[]): Promise<void> {
   const client = db();
-  const upserts = nails.map(
-    (n) => client`
+  const upserts = nails.map((n) => {
+    const slug = n.slug ?? buildSlug(n);
+    return client`
       INSERT INTO designs (
-        id, title, style, color, shape, length, occasion, mood, technique, detail,
+        id, title, slug, style, color, shape, length, occasion, mood, technique, detail,
         image_url, contributor, owner_id, source_platform, source_handle, source_url,
         status, caption
       ) VALUES (
-        ${n.id}, ${n.title ?? null}, ${n.style ?? null}, ${n.color ?? null},
+        ${n.id}, ${n.title ?? null}, ${slug}, ${n.style ?? null}, ${n.color ?? null},
         ${n.shape ?? null}, ${n.length ?? null}, ${n.occasion ?? null}, ${n.mood ?? null},
         ${n.technique ?? null}, ${n.detail ?? null}, ${n.imageUrl ?? null},
         ${n.contributor ?? null}, ${n.ownerId ?? null}, ${n.source?.platform ?? null},
@@ -310,9 +348,10 @@ export async function replaceCatalog(nails: Nail[]): Promise<void> {
         image_url = EXCLUDED.image_url, contributor = EXCLUDED.contributor,
         owner_id = EXCLUDED.owner_id, source_platform = EXCLUDED.source_platform,
         source_handle = EXCLUDED.source_handle, source_url = EXCLUDED.source_url,
-        status = EXCLUDED.status, caption = EXCLUDED.caption
-    `,
-  );
+        status = EXCLUDED.status, caption = EXCLUDED.caption,
+        slug = COALESCE(designs.slug, EXCLUDED.slug)
+    `;
+  });
   const ids = nails.map((n) => n.id);
   // Delete anything no longer in the array (handles removals + clear-all).
   const prune = client`DELETE FROM designs WHERE id <> ALL(${ids}::text[])`;

@@ -44,7 +44,7 @@ export function NailCard({ nail, score }: { nail: Nail; score?: number }) {
 
   return (
     <Link
-      href={`/nail/${nail.id}`}
+      href={nail.slug ? `/designs/${nail.slug}` : `/nail/${nail.id}`}
       className="group block overflow-hidden rounded-3xl bg-white shadow-[var(--shadow-card)] transition-transform active:scale-[0.98]"
     >
       <div className="relative">
