@@ -41,20 +41,27 @@ export type GeminiResult = {
 };
 
 /**
- * Call Gemini `generateContent` with the given request body and config. Falls
- * back through the model chain on quota/credit (429) errors, and retries
- * transient 5xx. Returns the parsed response, or null if nothing worked.
+ * Call Gemini `generateContent` with the given request body and config. Retries
+ * transient 5xx on the same model. By default it also falls back through the
+ * model chain (e.g. to gemini-2.0-flash) on quota/credit (429); pass
+ * `allowFallback = false` to try ONLY the primary model — useful when the
+ * fallback shares the same key/quota (so it'd just burn an extra request) and a
+ * weaker model would hurt quality (e.g. the advisor). Returns null if nothing
+ * worked.
  */
 export async function geminiGenerate(
   body: Record<string, unknown>,
   config: GeminiConfig,
   timeoutMs = 25_000,
+  allowFallback = true,
 ): Promise<GeminiResult | null> {
   const apiKey = config.apiKey;
   if (!apiKey) return null;
 
+  const primary = config.model || DEFAULT_MODEL;
+  const models = allowFallback ? modelChain(primary) : [primary];
   const payload = JSON.stringify(body);
-  for (const model of modelChain(config.model || DEFAULT_MODEL)) {
+  for (const model of models) {
     for (let attempt = 0; attempt < 3; attempt++) {
       let res: Response;
       try {
