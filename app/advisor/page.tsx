@@ -9,9 +9,12 @@ import { chatAdvisor, type AdvisorProfile, type AdvisorResult } from "@/lib/ai";
 import { ELEMENT_VI } from "@/lib/fengshui";
 import { useLibrary } from "@/lib/store";
 
-// A "result" message is an inline marker that renders the recommendations
-// at that point in the conversation, so later chat flows below the designs.
-type Message = { role: "bot" | "user" | "result"; text?: string };
+// A "result" message renders a recommendations grid inline at that point in
+// the conversation (carrying its own snapshot, so refinements pin a NEW grid
+// below rather than mutating an earlier one).
+type Message =
+  | { role: "bot" | "user"; text: string }
+  | { role: "result"; result: AdvisorResult };
 
 const GREETING = "Hi! I’m your personal nail stylist 💕 What should I call you?";
 
@@ -21,12 +24,13 @@ export default function AdvisorPage() {
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [profile, setProfile] = useState<Partial<AdvisorProfile>>({});
-  const [result, setResult] = useState<AdvisorResult | null>(null);
+  // Last recommendations shown — used to detect when picks change + for UI state.
+  const [lastResult, setLastResult] = useState<AdvisorResult | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, result, loading]);
+  }, [messages, loading]);
 
   async function send() {
     const text = draft.trim();
@@ -42,6 +46,9 @@ export default function AdvisorPage() {
       birthYear?: number;
       favoriteColor?: string;
       occasion?: string;
+      length?: string;
+      shape?: string;
+      style?: string;
       ready?: boolean;
     } = {};
     try {
@@ -65,26 +72,37 @@ export default function AdvisorPage() {
 
     setMessages((m) => [...m, { role: "bot", text: data.reply ?? "Tell me a little more!" }]);
 
-    // Merge any facts the model gathered this turn.
+    // Merge any facts/refinements the model gathered this turn.
     const merged: Partial<AdvisorProfile> = {
       name: data.name ?? profile.name,
       birthYear: data.birthYear ?? profile.birthYear,
       favoriteColor: data.favoriteColor ?? profile.favoriteColor,
       occasion: data.occasion ?? profile.occasion,
+      length: data.length ?? profile.length,
+      shape: data.shape ?? profile.shape,
+      style: data.style ?? profile.style,
     };
     setProfile(merged);
 
+    // Once the core profile is complete, (re)compute recommendations. Pin a new
+    // grid only when the picks actually change — so the first reveal and each
+    // refinement ("short nails", etc.) appear as a fresh grid below the chat.
     if (
       data.ready &&
-      !result &&
       merged.name &&
       merged.birthYear &&
       merged.favoriteColor &&
       merged.occasion
     ) {
-      setResult(chatAdvisor(merged as AdvisorProfile, nails));
-      // Pin the designs into the conversation flow so further chat stays below.
-      setMessages((m) => [...m, { role: "result" }]);
+      const next = chatAdvisor(merged as AdvisorProfile, nails);
+      const sameAsLast =
+        lastResult &&
+        lastResult.recommendations.map((r) => r.nail.id).join() ===
+          next.recommendations.map((r) => r.nail.id).join();
+      if (!sameAsLast) {
+        setLastResult(next);
+        setMessages((m) => [...m, { role: "result", result: next }]);
+      }
     }
   }
 
@@ -92,7 +110,7 @@ export default function AdvisorPage() {
     setMessages([{ role: "bot", text: GREETING }]);
     setDraft("");
     setProfile({});
-    setResult(null);
+    setLastResult(null);
   }
 
   return (
@@ -103,9 +121,9 @@ export default function AdvisorPage() {
         <div className="flex flex-col gap-3">
           {messages.map((m, i) =>
             m.role === "result" ? (
-              result && <ResultBlock key={i} result={result} />
+              <ResultBlock key={i} result={m.result} />
             ) : (
-              <Bubble key={i} role={m.role} text={m.text ?? ""} />
+              <Bubble key={i} role={m.role} text={m.text} />
             ),
           )}
           {loading && <Typing />}
@@ -127,7 +145,7 @@ export default function AdvisorPage() {
                 send();
               }
             }}
-            placeholder={result ? "Ask me anything else…" : "Type your reply…"}
+            placeholder={lastResult ? "Ask me anything else…" : "Type your reply…"}
             className="h-11 flex-1 rounded-full border border-[var(--color-line)] bg-white px-4 text-sm outline-none focus:border-accent"
             autoFocus
           />
@@ -135,7 +153,7 @@ export default function AdvisorPage() {
             Send
           </Button>
         </div>
-        {result && (
+        {lastResult && (
           <button
             type="button"
             onClick={restart}

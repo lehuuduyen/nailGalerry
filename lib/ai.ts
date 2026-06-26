@@ -66,6 +66,10 @@ export type AdvisorProfile = {
   birthYear: number;
   favoriteColor: string;
   occasion: string;
+  // Optional design refinements the client can mention to narrow the picks.
+  length?: string;
+  shape?: string;
+  style?: string;
 };
 
 export type AdvisorResult = {
@@ -115,7 +119,17 @@ export function chatAdvisor(profile: AdvisorProfile, nails: Nail[]): AdvisorResu
   const element = menhFromYear(profile.birthYear);
   const recommendedColors = ELEMENT_COLORS[element];
 
-  const recommendations: ScoredNail[] = nails
+  // Apply any explicit design refinements (length/shape/style) as hard filters,
+  // but skip a filter if it would leave nothing to recommend.
+  let pool = nails;
+  for (const key of ["length", "shape", "style"] as const) {
+    const want = profile[key];
+    if (!want) continue;
+    const filtered = pool.filter((n) => n[key] === want);
+    if (filtered.length) pool = filtered;
+  }
+
+  const recommendations: ScoredNail[] = pool
     .map((nail) => ({ nail, score: scoreNail(nail, profile, recommendedColors, age) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 4);

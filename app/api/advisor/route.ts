@@ -16,6 +16,9 @@ export const runtime = "nodejs";
 
 const COLORS = GROUP_BY_KEY.color.values;
 const OCCASIONS = GROUP_BY_KEY.occasion.values;
+const LENGTHS = GROUP_BY_KEY.length.values;
+const SHAPES = GROUP_BY_KEY.shape.values;
+const STYLES = GROUP_BY_KEY.style.values;
 
 type Msg = { role: "user" | "bot"; text: string };
 
@@ -26,10 +29,15 @@ const SYSTEM =
   "birth year (for feng-shui), favourite colour, and the occasion they're planning for. " +
   "Ask for whatever is still missing, conversationally — never list all questions at once. " +
   "When you know all four, set ready=true and write a lovely closing line saying you've " +
-  "picked some designs for them below. Always reply in English.\n\n" +
+  "picked some designs for them below. If the client later refines what they want (e.g. " +
+  "shorter nails, a different shape or style), acknowledge it, keep ready=true, and capture " +
+  "the refinement so the picks can update. Always reply in English.\n\n" +
   "Return JSON with: reply (your next message to the client), and any facts gathered so far " +
   `(name; birthYear as a 4-digit number; favoriteColor — map to one of [${COLORS.join(", ")}]; ` +
-  `occasion — map to one of [${OCCASIONS.join(", ")}]); and ready (true only once all four are known).`;
+  `occasion — map to one of [${OCCASIONS.join(", ")}]; ` +
+  `and ONLY when the client mentions them: length — one of [${LENGTHS.join(", ")}]; ` +
+  `shape — one of [${SHAPES.join(", ")}]; style — one of [${STYLES.join(", ")}]); ` +
+  "and ready (true only once the first four are known).";
 
 const RESPONSE_SCHEMA = {
   type: "OBJECT",
@@ -39,10 +47,23 @@ const RESPONSE_SCHEMA = {
     birthYear: { type: "INTEGER" },
     favoriteColor: { type: "STRING", enum: COLORS },
     occasion: { type: "STRING", enum: OCCASIONS },
+    length: { type: "STRING", enum: LENGTHS },
+    shape: { type: "STRING", enum: SHAPES },
+    style: { type: "STRING", enum: STYLES },
     ready: { type: "BOOLEAN" },
   },
   required: ["reply", "ready"],
-  propertyOrdering: ["reply", "name", "birthYear", "favoriteColor", "occasion", "ready"],
+  propertyOrdering: [
+    "reply",
+    "name",
+    "birthYear",
+    "favoriteColor",
+    "occasion",
+    "length",
+    "shape",
+    "style",
+    "ready",
+  ],
 };
 
 export async function POST(req: Request) {
@@ -97,6 +118,9 @@ export async function POST(req: Request) {
         birthYear: parsed.birthYear,
         favoriteColor: COLORS.includes(parsed.favoriteColor) ? parsed.favoriteColor : undefined,
         occasion: OCCASIONS.includes(parsed.occasion) ? parsed.occasion : undefined,
+        length: LENGTHS.includes(parsed.length) ? parsed.length : undefined,
+        shape: SHAPES.includes(parsed.shape) ? parsed.shape : undefined,
+        style: STYLES.includes(parsed.style) ? parsed.style : undefined,
         ready: Boolean(parsed.ready),
       });
     } catch {
