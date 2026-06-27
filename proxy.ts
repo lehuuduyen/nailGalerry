@@ -54,6 +54,7 @@ export const config = {
     "/api/catalog",
     "/api/store-image",
     "/api/auto-tag",
+    "/api/auto-tag/:path*",
     "/api/instagram",
     "/api/instagram/:path*",
   ],

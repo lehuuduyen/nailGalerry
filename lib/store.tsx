@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { autoTagImage } from "./ai";
 import { AuthProvider } from "./auth-client";
 import { TAG_GROUPS } from "./constants";
 import { isInstagramCdn } from "./img";
@@ -71,6 +70,11 @@ function save(key: string, value: unknown) {
 
 type ImportOutcome = { ok: boolean; error?: string; count?: number; skipped?: number };
 
+/** Live progress of a bulk auto-tag run. */
+export type TagProgress = { tagged: number; failed: number; remaining: number };
+/** Final tally of a bulk auto-tag run. */
+export type TagResult = { tagged: number; failed: number };
+
 type LibraryContextValue = {
   /** Every catalog item — the admin sees both pending and approved. */
   nails: Nail[];
@@ -84,8 +88,11 @@ type LibraryContextValue = {
   importProfile: (url: string, limit?: number) => Promise<ImportOutcome>;
   /** Load demo sample designs as pending (offline demo). */
   importSamplePosts: () => void;
-  /** Run Gemini auto-tagging on every pending design. Returns how many. */
-  tagPending: () => Promise<number>;
+  /**
+   * Bulk Gemini auto-tagging of every pending design, in server-side chunks.
+   * Reports live progress and returns the true success/failure counts.
+   */
+  tagPending: (onProgress?: (p: TagProgress) => void) => Promise<TagResult>;
   /** Approve one pending design — makes it visible to visitors. */
   approveNail: (id: string) => void;
   /** Approve every pending design. Returns how many. */
@@ -289,24 +296,57 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
     saveCatalog(next);
   }, [saveCatalog]);
 
-  // Run Gemini auto-tagging on every pending design at once.
-  const tagPending = useCallback(async (): Promise<number> => {
-    const pendingNails = nailsRef.current.filter((n) => n.status === "pending");
-    if (pendingNails.length === 0) return 0;
-    const tagged = await Promise.all(
-      pendingNails.map(async (n) => ({
-        id: n.id,
-        tags: await autoTagImage({ title: n.title, imageUrl: n.imageUrl, caption: n.caption }),
-      })),
-    );
-    const byId = new Map(tagged.map((t) => [t.id, t.tags]));
-    const next = nailsRef.current.map((n) =>
-      byId.has(n.id) ? { ...n, ...completeTags(byId.get(n.id)!) } : n,
-    );
-    setNails(next);
-    saveCatalog(next);
-    return pendingNails.length;
-  }, [saveCatalog]);
+  // Bulk Gemini auto-tagging. Drives the server-side batch endpoint in small
+  // chunks until no pending design needs tags, reporting real progress as it
+  // goes. The endpoint writes tags straight to Neon, so we refresh() afterwards
+  // to pull the updated rows back into the store. Returns the true counts —
+  // unlike before, a chunk that Gemini couldn't tag is reported as failed, not
+  // silently counted as success.
+  const tagPending = useCallback(
+    async (onProgress?: (p: TagProgress) => void): Promise<TagResult> => {
+      const exclude: string[] = [];
+      let tagged = 0;
+      let failed = 0;
+      // Guard against an unexpected non-terminating loop.
+      for (let i = 0; i < 500; i++) {
+        let res: Response;
+        try {
+          res = await fetch("/api/auto-tag/batch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ limit: 6, exclude }),
+          });
+        } catch {
+          break; // network error — stop and report what we have.
+        }
+        if (!res.ok) break;
+        const d = (await res.json().catch(() => null)) as {
+          processed: number;
+          tagged: number;
+          failed: number;
+          remaining: number;
+          processedIds: string[];
+        } | null;
+        if (!d) break;
+        tagged += d.tagged;
+        failed += d.failed;
+        exclude.push(...(d.processedIds ?? []));
+        onProgress?.({ tagged, failed, remaining: d.remaining });
+        if (d.processed === 0 || d.remaining <= 0) break;
+      }
+      // Pull the freshly-tagged rows back into the store. Bypass the CDN cache
+      // (the catalog GET is cacheable for 5 min) so the admin sees tags now.
+      try {
+        const r = await fetch("/api/catalog", { cache: "no-store" });
+        const d = await r.json();
+        if (Array.isArray(d.nails)) setNails(d.nails as Nail[]);
+      } catch {
+        /* keep current data on a refresh hiccup */
+      }
+      return { tagged, failed };
+    },
+    [],
+  );
 
   const approveNail = useCallback(
     (id: string) => {

@@ -62,6 +62,11 @@ type DesignRow = {
   slug: string | null;
   alt_text: string | null;
   description: string | null;
+  accent_colors: string[] | null;
+  season: string | null;
+  style_origin: string | null;
+  skin_tone: string | null;
+  undertone: string | null;
 };
 
 function rowToNail(r: DesignRow): Nail {
@@ -79,6 +84,11 @@ function rowToNail(r: DesignRow): Nail {
     slug: r.slug ?? undefined,
     altText: r.alt_text ?? undefined,
     description: r.description ?? undefined,
+    accentColors: r.accent_colors && r.accent_colors.length ? r.accent_colors : undefined,
+    season: r.season ?? undefined,
+    styleOrigin: r.style_origin ?? undefined,
+    skinTone: r.skin_tone ?? undefined,
+    undertone: r.undertone ?? undefined,
     ...tags,
     imageUrl: r.image_url ?? undefined,
     caption: r.caption ?? undefined,
@@ -302,15 +312,20 @@ export async function getDesignsByOwner(ownerId: string): Promise<Nail[]> {
 /** Insert one design (used by uploads/imports). Generates a slug if missing. */
 export async function insertDesign(n: Nail): Promise<void> {
   const slug = n.slug ?? buildSlug(n);
+  const accent = n.accentColors && n.accentColors.length ? n.accentColors : null;
   await db()`
     INSERT INTO designs (
-      id, title, slug, style, color, shape, length, occasion, mood, technique, detail,
+      id, title, slug, description, alt_text, style, color, shape, length, occasion, mood, technique, detail,
+      accent_colors, season, style_origin, skin_tone, undertone,
       image_url, contributor, owner_id, source_platform, source_handle, source_url,
       status, caption
     ) VALUES (
-      ${n.id}, ${n.title ?? null}, ${slug}, ${n.style ?? null}, ${n.color ?? null},
+      ${n.id}, ${n.title ?? null}, ${slug}, ${n.description ?? null}, ${n.altText ?? null},
+      ${n.style ?? null}, ${n.color ?? null},
       ${n.shape ?? null}, ${n.length ?? null}, ${n.occasion ?? null}, ${n.mood ?? null},
-      ${n.technique ?? null}, ${n.detail ?? null}, ${n.imageUrl ?? null},
+      ${n.technique ?? null}, ${n.detail ?? null},
+      ${accent}::text[], ${n.season ?? null}, ${n.styleOrigin ?? null}, ${n.skinTone ?? null}, ${n.undertone ?? null},
+      ${n.imageUrl ?? null},
       ${n.contributor ?? null}, ${n.ownerId ?? null}, ${n.source?.platform ?? null},
       ${n.source?.handle ?? null}, ${n.source?.url ?? null}, ${n.status ?? "approved"},
       ${n.caption ?? null}
@@ -328,15 +343,20 @@ export async function replaceCatalog(nails: Nail[]): Promise<void> {
   const client = db();
   const upserts = nails.map((n) => {
     const slug = n.slug ?? buildSlug(n);
+    const accent = n.accentColors && n.accentColors.length ? n.accentColors : null;
     return client`
       INSERT INTO designs (
-        id, title, slug, style, color, shape, length, occasion, mood, technique, detail,
+        id, title, slug, description, alt_text, style, color, shape, length, occasion, mood, technique, detail,
+        accent_colors, season, style_origin, skin_tone, undertone,
         image_url, contributor, owner_id, source_platform, source_handle, source_url,
         status, caption
       ) VALUES (
-        ${n.id}, ${n.title ?? null}, ${slug}, ${n.style ?? null}, ${n.color ?? null},
+        ${n.id}, ${n.title ?? null}, ${slug}, ${n.description ?? null}, ${n.altText ?? null},
+        ${n.style ?? null}, ${n.color ?? null},
         ${n.shape ?? null}, ${n.length ?? null}, ${n.occasion ?? null}, ${n.mood ?? null},
-        ${n.technique ?? null}, ${n.detail ?? null}, ${n.imageUrl ?? null},
+        ${n.technique ?? null}, ${n.detail ?? null},
+        ${accent}::text[], ${n.season ?? null}, ${n.styleOrigin ?? null}, ${n.skinTone ?? null}, ${n.undertone ?? null},
+        ${n.imageUrl ?? null},
         ${n.contributor ?? null}, ${n.ownerId ?? null}, ${n.source?.platform ?? null},
         ${n.source?.handle ?? null}, ${n.source?.url ?? null}, ${n.status ?? "approved"},
         ${n.caption ?? null}
@@ -349,13 +369,86 @@ export async function replaceCatalog(nails: Nail[]): Promise<void> {
         owner_id = EXCLUDED.owner_id, source_platform = EXCLUDED.source_platform,
         source_handle = EXCLUDED.source_handle, source_url = EXCLUDED.source_url,
         status = EXCLUDED.status, caption = EXCLUDED.caption,
-        slug = COALESCE(designs.slug, EXCLUDED.slug)
+        slug = COALESCE(designs.slug, EXCLUDED.slug),
+        description = COALESCE(EXCLUDED.description, designs.description),
+        alt_text = COALESCE(EXCLUDED.alt_text, designs.alt_text),
+        accent_colors = COALESCE(EXCLUDED.accent_colors, designs.accent_colors),
+        season = COALESCE(EXCLUDED.season, designs.season),
+        style_origin = COALESCE(EXCLUDED.style_origin, designs.style_origin),
+        skin_tone = COALESCE(EXCLUDED.skin_tone, designs.skin_tone),
+        undertone = COALESCE(EXCLUDED.undertone, designs.undertone)
     `;
   });
   const ids = nails.map((n) => n.id);
   // Delete anything no longer in the array (handles removals + clear-all).
   const prune = client`DELETE FROM designs WHERE id <> ALL(${ids}::text[])`;
   await client.transaction([...upserts, prune]);
+}
+
+/**
+ * The next chunk of pending designs that still need AI tags, oldest first. A
+ * design counts as "needs tags" while its `alt_text` is NULL (only the tagger
+ * sets it), so once tagged it naturally drops out — giving the bulk tagger
+ * idempotency. `exclude` skips ids already attempted this run (incl. failures),
+ * so a permanently-broken image can never cause an infinite loop.
+ */
+export async function getUntaggedPending(limit: number, exclude: string[] = []): Promise<Nail[]> {
+  const rows = (await db()`
+    SELECT * FROM designs
+    WHERE status = 'pending' AND alt_text IS NULL AND id <> ALL(${exclude}::text[])
+    ORDER BY created_at ASC NULLS FIRST, id
+    LIMIT ${limit}
+  `) as DesignRow[];
+  return rows.map(rowToNail);
+}
+
+/** How many pending designs still need AI tags (for the progress denominator). */
+export async function countUntaggedPending(): Promise<number> {
+  const rows = (await db()`
+    SELECT count(*)::int AS n FROM designs WHERE status = 'pending' AND alt_text IS NULL
+  `) as { n: number }[];
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * Overwrite one design's AI-derived tags + metadata (used by the bulk
+ * auto-tagger). Only writes fields that were actually produced — a field left
+ * undefined keeps its current value, so a partial classification never wipes
+ * good data. Does not touch status, so the admin still approves manually.
+ */
+export async function updateDesignTags(
+  id: string,
+  t: {
+    tags: Partial<NailTags>;
+    accentColors?: string[];
+    season?: string;
+    styleOrigin?: string;
+    skinTone?: string;
+    undertone?: string;
+    altText?: string;
+    description?: string;
+  },
+): Promise<void> {
+  const accent = t.accentColors && t.accentColors.length ? t.accentColors : null;
+  await db()`
+    UPDATE designs SET
+      style       = COALESCE(${t.tags.style ?? null}, style),
+      color       = COALESCE(${t.tags.color ?? null}, color),
+      shape       = COALESCE(${t.tags.shape ?? null}, shape),
+      length      = COALESCE(${t.tags.length ?? null}, length),
+      occasion    = COALESCE(${t.tags.occasion ?? null}, occasion),
+      mood        = COALESCE(${t.tags.mood ?? null}, mood),
+      technique   = COALESCE(${t.tags.technique ?? null}, technique),
+      detail      = COALESCE(${t.tags.detail ?? null}, detail),
+      accent_colors = COALESCE(${accent}::text[], accent_colors),
+      season      = COALESCE(${t.season ?? null}, season),
+      style_origin = COALESCE(${t.styleOrigin ?? null}, style_origin),
+      skin_tone   = COALESCE(${t.skinTone ?? null}, skin_tone),
+      undertone   = COALESCE(${t.undertone ?? null}, undertone),
+      alt_text    = COALESCE(${t.altText ?? null}, alt_text),
+      description = COALESCE(${t.description ?? null}, description)
+    WHERE id = ${id}
+  `;
 }
 
 /** Delete one design by id (optionally constrained to an owner). Returns true if removed. */

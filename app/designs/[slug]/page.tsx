@@ -85,9 +85,28 @@ export default async function DesignPage({ params }: Params) {
   const name = keywordTitle(nail);
   const url = designUrl(slug);
   const image = resolveImageSrc(nail.imageUrl, { width: 1200 });
-  const keywords = [nail.style, nail.color, nail.shape, nail.length, nail.occasion, nail.mood]
+  const keywords = [
+    nail.style,
+    nail.color,
+    nail.shape,
+    nail.length,
+    nail.occasion,
+    nail.mood,
+    nail.styleOrigin,
+    nail.season,
+    ...(nail.accentColors ?? []),
+  ]
     .filter(Boolean)
     .join(", ");
+
+  // Extra AI-enriched attributes, shown as a secondary detail list when present.
+  const extraDetails: { label: string; value: string }[] = [
+    nail.accentColors?.length ? { label: "Accent colors", value: nail.accentColors.join(", ") } : null,
+    nail.season ? { label: "Season", value: nail.season } : null,
+    nail.styleOrigin ? { label: "Style origin", value: nail.styleOrigin } : null,
+    nail.skinTone ? { label: "Skin tone", value: nail.skinTone } : null,
+    nail.undertone ? { label: "Undertone", value: nail.undertone } : null,
+  ].filter((x): x is { label: string; value: string } => x !== null);
 
   // Structured data: an ImageObject (the photo) + a CreativeWork (the design).
   const jsonLd = {
@@ -147,6 +166,12 @@ export default async function DesignPage({ params }: Params) {
             <div key={g.key} className="flex items-center justify-between gap-3">
               <span className="text-xs font-medium text-[var(--color-muted)]">{g.label}</span>
               <Badge tone="soft">{nail[g.key]}</Badge>
+            </div>
+          ))}
+          {extraDetails.map((d) => (
+            <div key={d.label} className="flex items-center justify-between gap-3">
+              <span className="text-xs font-medium text-[var(--color-muted)]">{d.label}</span>
+              <Badge tone="soft">{d.value}</Badge>
             </div>
           ))}
         </div>

@@ -39,6 +39,16 @@ export type Nail = NailTags & {
   altText?: string;
   /** Long-form SEO description (from the DB); only loaded on the design page. */
   description?: string;
+  /** Extra accent/secondary colours (Gold, Silver, Green…), beyond the dominant `color`. */
+  accentColors?: string[];
+  /** Best-fit season (Spring/Summer/Fall/Winter/Holiday). */
+  season?: string;
+  /** Style origin / regional aesthetic (Korean, Japanese, Western, Russian). */
+  styleOrigin?: string;
+  /** Skin tone the design flatters most (Fair/Light/Medium/Tan/Deep). */
+  skinTone?: string;
+  /** Undertone the design flatters most (Warm/Cool/Neutral). */
+  undertone?: string;
   /** Optional real image URL (e.g. an uploaded object URL). Absent => gradient placeholder. */
   imageUrl?: string;
   source: Source;

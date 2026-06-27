@@ -180,10 +180,24 @@ export default function AdminPage() {
                   disabled={tagging}
                   onClick={async () => {
                     setTagging(true);
-                    setNotice(`Đang gọi Gemini gắn tag cho ${pendingNails.length} bài…`);
-                    const n = await tagPending();
+                    setError(null);
+                    setNotice(`Đang gọi Gemini gắn tag… (0/${pendingNails.length})`);
+                    const { tagged, failed } = await tagPending(({ tagged, failed }) => {
+                      setNotice(
+                        `Đang gọi Gemini gắn tag… đã xong ${tagged + failed}/${pendingNails.length}` +
+                          (failed ? ` (${failed} lỗi)` : ""),
+                      );
+                    });
                     setTagging(false);
-                    setNotice(`Đã gắn tag ${n} bài. Kiểm tra rồi duyệt.`);
+                    if (tagged === 0 && failed === 0) {
+                      setNotice("Không có bài nào cần gắn tag (đã gắn trước đó).");
+                    } else {
+                      setNotice(
+                        `Đã gắn tag ${tagged} bài` +
+                          (failed ? `, ${failed} bài lỗi (thử lại sau)` : "") +
+                          ". Kiểm tra rồi duyệt.",
+                      );
+                    }
                   }}
                 >
                   {tagging ? "Đang gắn tag…" : `Gọi Gemini (${pendingNails.length})`}

@@ -64,7 +64,7 @@ export async function POST(req: Request) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "Please sign in to upload." }, { status: 401 });
 
-  let body: { title?: string; dataUrl?: string; tags?: Record<string, string> };
+  let body: { title?: string; description?: string; dataUrl?: string; tags?: Record<string, string> };
   try {
     body = await req.json();
   } catch {
@@ -90,9 +90,11 @@ export async function POST(req: Request) {
   }
 
   const title = (body.title ?? "").trim().slice(0, 80) || `${name}'s design`;
+  const description = (body.description ?? "").trim().slice(0, 600) || undefined;
   const nail: Nail = {
     id: `user-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
     title,
+    description,
     ...sanitizeTags(body.tags),
     imageUrl,
     contributor: name,

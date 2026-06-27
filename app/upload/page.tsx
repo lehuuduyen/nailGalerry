@@ -32,6 +32,7 @@ function fileToDataUrl(file: File): Promise<string> {
 export default function UploadPage() {
   const { user, loading: authLoading } = useAuth();
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [tags, setTags] = useState<NailTags>(initialTags);
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -69,7 +70,7 @@ export default function UploadPage() {
       const res = await fetch("/api/contribute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title.trim(), dataUrl, tags }),
+        body: JSON.stringify({ title: title.trim(), description: description.trim(), dataUrl, tags }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -86,6 +87,7 @@ export default function UploadPage() {
 
   function shareAnother() {
     setTitle("");
+    setDescription("");
     setTags(initialTags());
     setDataUrl(null);
     setDone(false);
@@ -175,6 +177,21 @@ export default function UploadPage() {
               placeholder="e.g. Pink ombre almond"
               className="h-11 w-full rounded-xl border border-[var(--color-line)] bg-white px-3 text-sm outline-none focus:border-accent"
             />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[13px] font-semibold text-[var(--color-ink)]">
+              Description <span className="font-normal text-[var(--color-muted)]">(optional)</span>
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              maxLength={600}
+              rows={4}
+              placeholder="Describe your design — colours, finish, vibe, who it suits… (shown on the design page)"
+              className="w-full resize-y rounded-xl border border-[var(--color-line)] bg-white px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+            <p className="mt-1 px-1 text-[11px] text-[var(--color-muted)]">{description.length}/600</p>
           </div>
 
           <div>
