@@ -14,6 +14,7 @@ import {
 import { chatConfig, geminiGenerate, geminiText } from "@/lib/gemini";
 import {
   describeFilters,
+  extractFiltersFromText,
   FILTER_ENUMS,
   hasMinimum,
   mergeFilters,
@@ -82,7 +83,7 @@ const RESPONSE_SCHEMA = {
     lang: { type: "STRING", enum: LANGS },
     filters: { type: "OBJECT", properties: FILTER_PROPS },
   },
-  required: ["reply"],
+  required: ["reply", "lang"],
 };
 
 /** Best-effort language guess for fallbacks (when Gemini doesn't tell us). */
@@ -111,6 +112,14 @@ const NOTE_RELAXED: Record<Lang, string> = {
   vi: "Chưa có mẫu đúng y vậy nên mình gợi ý mấy mẫu gần giống nha!",
   es: "No encontré una coincidencia exacta, ¡aquí tienes algunas parecidas!",
 };
+// Positive lead-in used when we can show a grid but Gemini itself didn't give us
+// a usable reply (e.g. it was rate-limited) — so we never pair real results with
+// a confused "I didn't catch that".
+const NOTE_HERE: Record<Lang, string> = {
+  en: "Here are some designs you might love! 💕",
+  vi: "Đây là vài mẫu bạn có thể thích nha! 💕",
+  es: "¡Aquí tienes algunos diseños que te pueden encantar! 💕",
+};
 
 const SYSTEM =
   "You are a friendly, warm personal nail stylist.\n\n" +
@@ -124,8 +133,10 @@ const SYSTEM =
   "drop existing tags unless the user clearly changes their mind. ONLY use values from the provided " +
   "enum lists — never invent a value.\n" +
   "IMPORTANT: only set a tag when the user EXPLICITLY mentions it. Never guess or add tags the user " +
-  "didn't say — especially skin_tone and undertone (set these ONLY if the user talks about their own " +
-  "skin tone). If nothing maps, keep the filters unchanged.\n" +
+  "didn't say. Do NOT set style, technique, mood, season, style_origin, skin_tone, or undertone unless " +
+  "the user uses a word that clearly refers to it. For a bare colour like \"red\", set ONLY color=Red " +
+  "and nothing else. Example: user says \"red\" → filters {\"color\":\"Red\"} (do NOT also add style, " +
+  "technique, undertone, etc.). If nothing maps, return empty filters and keep the current ones.\n" +
   "Mapping (works in any language): a colour like red/pink/black/nude → color; the user's skin being " +
   "fair/light/tan/deep → skin_tone; short/medium/long → length; square/oval/almond/stiletto/coffin → " +
   "shape; 'Korean style' → style_origin=Korean; glitter/shimmer → detail=Foil/glitter; rhinestones/" +
@@ -145,11 +156,15 @@ async function askGemini(
   current: AdvisorFilters,
   message: string,
   username?: string,
-): Promise<{ filters: AdvisorFilters; reply: string; lang: Lang }> {
+): Promise<{ filters: AdvisorFilters; reply: string; lang: Lang; ok: boolean }> {
+  const guessed = detectLang(message);
+  const langName = { en: "English", vi: "Vietnamese", es: "Spanish" }[guessed];
   const prompt =
     (username ? `User display name (ignore its language): ${username}.\n` : "") +
     `Current filters: ${describeFilters(current)}\n` +
     `Allowed values per tag:\n${ENUM_HINT}\n\n` +
+    `The user's latest message looks like ${langName} — reply in ${langName} unless it is ` +
+    `clearly another language.\n` +
     `The user just said: "${message}"`;
 
   const text = geminiText(
@@ -160,7 +175,7 @@ async function askGemini(
         generationConfig: {
           responseMimeType: "application/json",
           responseSchema: RESPONSE_SCHEMA,
-          temperature: 0.3,
+          temperature: 0.2,
         },
       },
       chatConfig(),
@@ -177,7 +192,7 @@ async function askGemini(
       const lang: Lang = LANGS.includes(parsed.lang) ? parsed.lang : detectLang(message);
       const reply =
         typeof parsed.reply === "string" && parsed.reply.trim() ? parsed.reply.trim() : FALLBACK[lang];
-      return { filters: validateFilters(parsed.filters), reply, lang };
+      return { filters: validateFilters(parsed.filters), reply, lang, ok: true };
     } catch {
       /* malformed JSON — fall back below */
     }
@@ -185,7 +200,25 @@ async function askGemini(
   // Gemini unavailable (e.g. quota/429) or unparseable — keep filters, ask again
   // in the user's (best-guess) language.
   const lang = detectLang(message);
-  return { filters: {}, reply: FALLBACK[lang], lang };
+  return { filters: {}, reply: FALLBACK[lang], lang, ok: false };
+}
+
+/**
+ * Drop the soft fields Gemini most often fabricates (skin_tone, undertone,
+ * season) unless THIS message gives textual evidence for them — so a bare
+ * "red" can't silently add "undertone: Warm" and poison the query. Only prunes
+ * the current turn's inferences; values the user set earlier stay in `current`.
+ */
+function pruneFabricated(f: AdvisorFilters, message: string): AdvisorFilters {
+  const out = { ...f };
+  if (!/\b(skin|undertone|complexion|tone)\b/i.test(message)) {
+    delete out.skin_tone;
+    delete out.undertone;
+  }
+  if (!/\b(spring|summer|fall|autumn|winter|holiday|christmas|beach|season)\b/i.test(message)) {
+    delete out.season;
+  }
+  return out;
 }
 
 /** Be honest about result coverage in the reply, in the user's language. */
@@ -241,7 +274,12 @@ export async function POST(req: Request) {
   const turns: AdvisorTurn[] = sess?.turns ?? [];
 
   const ai = await askGemini(current, message, username);
-  const merged = mergeFilters(current, ai.filters);
+  // Deterministic backstop: capture clear mentions ("red", "party") straight
+  // from the text so a value is never lost when the model omits it from JSON.
+  // Direct mentions win over the model's structured filters.
+  const keyworded = extractFiltersFromText(message);
+  const aiClean = pruneFabricated(ai.filters, message);
+  const merged = mergeFilters(current, { ...aiClean, ...keyworded });
 
   let designs: Nail[] = [];
   let dropped: FilterField[] = [];
@@ -252,7 +290,10 @@ export async function POST(req: Request) {
     dropped = r.dropped;
   }
 
-  const reply = composeReply(ai.reply, ready, designs, dropped, ai.lang);
+  // If the model didn't give us a usable reply but the keyword backstop still
+  // got us to a grid, lead with a positive line instead of the confused fallback.
+  const base = !ai.ok && ready && designs.length > 0 ? NOTE_HERE[ai.lang] : ai.reply;
+  const reply = composeReply(base, ready, designs, dropped, ai.lang);
   const nextTurns: AdvisorTurn[] = [
     ...turns,
     { role: "user" as const, text: message },

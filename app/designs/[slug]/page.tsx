@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TopAppBar } from "@/components/TopAppBar";
 import { GradientThumb } from "@/components/GradientThumb";
@@ -10,6 +11,7 @@ import { getDesignBySlug, getPublishedDesigns, getPublishedSlugs } from "@/lib/d
 import { similarNails } from "@/lib/filter";
 import { resolveImageSrc } from "@/lib/imageUrl";
 import { designUrl, SITE_NAME } from "@/lib/site";
+import { singleCollectionSlug } from "@/lib/collections";
 import type { Nail } from "@/lib/types";
 
 // ISR: pre-render all known designs at build, render new ones on first request,
@@ -162,12 +164,22 @@ export default async function DesignPage({ params }: Params) {
         <p className="mt-3 text-sm leading-relaxed text-[var(--color-ink)]">{description}</p>
 
         <div className="mt-4 flex flex-col gap-3">
-          {TAG_GROUPS.map((g) => (
-            <div key={g.key} className="flex items-center justify-between gap-3">
-              <span className="text-xs font-medium text-[var(--color-muted)]">{g.label}</span>
-              <Badge tone="soft">{nail[g.key]}</Badge>
-            </div>
-          ))}
+          {TAG_GROUPS.map((g) => {
+            const value = nail[g.key];
+            const to = singleCollectionSlug(g.key, value);
+            return (
+              <div key={g.key} className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-[var(--color-muted)]">{g.label}</span>
+                {to ? (
+                  <Link href={`/nails/${to}`}>
+                    <Badge tone="soft">{value}</Badge>
+                  </Link>
+                ) : (
+                  <Badge tone="soft">{value}</Badge>
+                )}
+              </div>
+            );
+          })}
           {extraDetails.map((d) => (
             <div key={d.label} className="flex items-center justify-between gap-3">
               <span className="text-xs font-medium text-[var(--color-muted)]">{d.label}</span>

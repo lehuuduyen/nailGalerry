@@ -235,26 +235,52 @@ async function runDesignQuery(f: AdvisorFilters, limit: number): Promise<Nail[]>
 
 export type QueryResult = { items: Nail[]; dropped: FilterField[] };
 
+// The user's intent anchors — we keep these as long as they return ANY design,
+// and only drop them (color first, then occasion) when nothing matches at all.
+const CORE_FILTERS: FilterField[] = ["color", "occasion"];
+
+const TARGET = 4;
+
+const isSet = (f: AdvisorFilters, k: FilterField) => {
+  const v = f[k];
+  return Array.isArray(v) ? v.length > 0 : v != null;
+};
+
 /**
- * Query designs by the advisor's filters. If the exact match returns < 4, drop
- * the least-important tags one at a time (RELAX_ORDER) until there are enough —
- * returning which tags were dropped so the reply can be honest about it.
+ * Query designs by the advisor's filters. We trim the OPTIONAL tags one at a
+ * time (RELAX_ORDER) to reach a comfortable number of results, but we never
+ * drop the core anchors (color, occasion) just to pad the count — so asking for
+ * "red party" returns the 3 red party designs, not 16 random party ones. The
+ * core anchors are only relaxed if the query returns nothing at all. Returns
+ * which tags were dropped so the reply can be honest about it.
  */
 export async function queryDesigns(filters: AdvisorFilters, limit = 16): Promise<QueryResult> {
   let f: AdvisorFilters = { ...filters };
   const dropped: FilterField[] = [];
+
+  // Phase 1: relax optional tags to reach TARGET, keeping core anchors intact.
   for (;;) {
     const items = await runDesignQuery(f, limit);
-    if (items.length >= 4) return { items, dropped };
-    const next = RELAX_ORDER.find((k) => {
-      const v = f[k];
-      return Array.isArray(v) ? v.length > 0 : v != null;
-    });
-    if (!next) return { items, dropped }; // nothing left to relax
+    if (items.length >= TARGET) return { items, dropped };
+    const next = RELAX_ORDER.find((k) => !CORE_FILTERS.includes(k) && isSet(f, k));
+    if (!next) break; // only core anchors left
     f = { ...f };
     delete f[next];
     dropped.push(next);
   }
+
+  // Phase 2: <TARGET with only core anchors left. Keep them while they return
+  // anything; drop them (color, then occasion) only when the result is empty.
+  let items = await runDesignQuery(f, limit);
+  for (const k of CORE_FILTERS) {
+    if (items.length > 0) break;
+    if (!isSet(f, k)) continue;
+    f = { ...f };
+    delete f[k];
+    dropped.push(k);
+    items = await runDesignQuery(f, limit);
+  }
+  return { items, dropped };
 }
 
 export type AdvisorTurn = { role: "user" | "bot"; text: string; gridDesignIds?: string[] };
