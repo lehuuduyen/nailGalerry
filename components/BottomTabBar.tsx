@@ -21,20 +21,45 @@ function isActive(pathname: string, href: string): boolean {
 
 export function BottomTabBar() {
   const pathname = usePathname();
-  // The Admin tab is only shown to admins (those who've signed in on this
-  // browser). Real protection is enforced server-side by proxy.ts.
+  // The Admin tab is only shown when this browser holds a valid admin session.
+  // We optimistically read the local flag (instant, no flash) but confirm with
+  // the HttpOnly cookie via /api/auth/admin-me, so an expired/absent session
+  // hides the tab and self-heals the stale flag. Real protection is enforced
+  // server-side by proxy.ts.
   const [isAdmin, setIsAdmin] = useState(false);
   useEffect(() => {
-    const read = () => {
+    const readFlag = () => {
       try {
         setIsAdmin(window.localStorage.getItem(ADMIN_FLAG) === "1");
       } catch {
         setIsAdmin(false);
       }
     };
-    read();
-    window.addEventListener("storage", read);
-    return () => window.removeEventListener("storage", read);
+    readFlag();
+    window.addEventListener("storage", readFlag);
+
+    let cancelled = false;
+    fetch("/api/auth/admin-me", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        const admin = Boolean(d?.admin);
+        setIsAdmin(admin);
+        try {
+          if (admin) window.localStorage.setItem(ADMIN_FLAG, "1");
+          else window.localStorage.removeItem(ADMIN_FLAG);
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(() => {
+        /* offline / hiccup — keep the optimistic flag value */
+      });
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("storage", readFlag);
+    };
   }, [pathname]);
 
   const tabs = TABS.filter((t) => t.href !== "/admin" || isAdmin);
