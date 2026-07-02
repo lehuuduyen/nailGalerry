@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
-import { getAllDesigns, isDbConfigured, replaceCatalog } from "@/lib/db";
+import { cookies } from "next/headers";
+import { getAllDesigns, getPublishedDesigns, isDbConfigured, replaceCatalog } from "@/lib/db";
+import { ADMIN_COOKIE, verifyAdminToken } from "@/lib/admin-auth";
 import type { Nail } from "@/lib/types";
 
 // ─────────────────────────────────────────────────────────────────────────
 //  GET  /api/catalog  ->  { nails }
 //  PUT  /api/catalog  { nails }  ->  { ok, count }
 //
-//  The gallery catalog now lives in Neon Postgres (table `designs`). GET is
-//  public; PUT (admin, gated by proxy.ts) replaces the catalog to match the
-//  posted array — upserting every design and removing any that are gone.
+//  The gallery catalog lives in Neon Postgres (table `designs`). GET is public
+//  but returns PUBLISHED designs only — pending submissions are never exposed
+//  to visitors. An authenticated admin (admin cookie) gets the full list,
+//  including pending, so the admin dashboard can review/approve them. PUT
+//  (admin only) replaces the catalog to match the posted array.
 // ─────────────────────────────────────────────────────────────────────────
 
 export const runtime = "nodejs";
@@ -18,10 +22,20 @@ export const runtime = "nodejs";
 // while revalidating — cuts origin DB hits and speeds up Home.
 const CACHE_HEADER = "public, s-maxage=300, stale-while-revalidate=600";
 
+async function isAdmin(): Promise<boolean> {
+  return verifyAdminToken((await cookies()).get(ADMIN_COOKIE)?.value);
+}
+
 export async function GET() {
   if (!isDbConfigured()) return NextResponse.json({ nails: [] });
   try {
-    const nails = await getAllDesigns();
+    // Admins see everything (incl. pending, uncached); the public sees only
+    // published designs, served from the CDN.
+    if (await isAdmin()) {
+      const nails = await getAllDesigns();
+      return NextResponse.json({ nails }, { headers: { "Cache-Control": "private, no-store" } });
+    }
+    const nails = await getPublishedDesigns();
     return NextResponse.json({ nails }, { headers: { "Cache-Control": CACHE_HEADER } });
   } catch {
     // Never hard-fail the gallery on a DB hiccup — show empty instead.
@@ -30,6 +44,9 @@ export async function GET() {
 }
 
 export async function PUT(req: Request) {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Admin authentication required." }, { status: 401 });
+  }
   if (!isDbConfigured()) {
     return NextResponse.json({ error: "Database is not configured." }, { status: 501 });
   }

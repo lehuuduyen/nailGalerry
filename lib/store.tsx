@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import { AuthProvider } from "./auth-client";
-import { TAG_GROUPS } from "./constants";
+import { ADMIN_FLAG, TAG_GROUPS } from "./constants";
 import { isInstagramCdn } from "./img";
 import { INSTAGRAM_POOL } from "./mock-data";
 import type { Nail, NailTags, TagKey } from "./types";
@@ -20,6 +20,22 @@ import type { Nail, NailTags, TagKey } from "./types";
  * expiry. Returns the permanent URL, or the original if storage isn't set up
  * or the image isn't an Instagram CDN URL. Never throws.
  */
+/**
+ * The catalog URL to read. Admin browsers append a cache-buster so they bypass
+ * the CDN-cached (published-only) response and get the full list — including
+ * pending submissions the API only returns to an authenticated admin.
+ */
+function catalogUrl(): string {
+  try {
+    if (typeof window !== "undefined" && window.localStorage.getItem(ADMIN_FLAG) === "1") {
+      return `/api/catalog?full=1&t=${Date.now()}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return "/api/catalog";
+}
+
 async function persistImage(url?: string): Promise<string | undefined> {
   if (!url || !isInstagramCdn(url)) return url;
   try {
@@ -138,7 +154,7 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
     importCountRef.current = savedImports;
     setImportCount(savedImports);
     setHydrated(true);
-    fetch("/api/catalog")
+    fetch(catalogUrl())
       .then((r) => r.json())
       .then((d) => {
         if (Array.isArray(d.nails)) setNails(d.nails as Nail[]);
@@ -156,7 +172,7 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
     try {
       // Default caching: the response is CDN-cacheable (s-maxage=300), so
       // repeat Home visits are cheap; like counts refresh within ~5 min.
-      const r = await fetch("/api/catalog");
+      const r = await fetch(catalogUrl());
       const d = await r.json();
       if (Array.isArray(d.nails)) setNails(d.nails as Nail[]);
     } catch {
@@ -337,7 +353,7 @@ function LibraryProvider({ children }: { children: React.ReactNode }) {
       // Pull the freshly-tagged rows back into the store. Bypass the CDN cache
       // (the catalog GET is cacheable for 5 min) so the admin sees tags now.
       try {
-        const r = await fetch("/api/catalog", { cache: "no-store" });
+        const r = await fetch(catalogUrl(), { cache: "no-store" });
         const d = await r.json();
         if (Array.isArray(d.nails)) setNails(d.nails as Nail[]);
       } catch {

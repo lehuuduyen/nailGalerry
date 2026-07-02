@@ -1,57 +1,55 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { ADMIN_COOKIE, verifyAdminToken } from "./lib/admin-auth";
 
 // ─────────────────────────────────────────────────────────────────────────
-//  Admin auth. Protects the /admin page and every mutating API route with
-//  HTTP Basic Auth using ADMIN_USER / ADMIN_PASSWORD from the environment.
+//  Admin gate. Protects the /admin pages and the mutating API routes with a
+//  signed session cookie (see lib/admin-auth.ts + /api/auth/admin-login).
 //
-//  Public reads stay open: GET /api/catalog (the shared gallery) and the
-//  image proxy are never gated, so visitors can browse without logging in.
+//  We deliberately do NOT use HTTP Basic Auth here: its `WWW-Authenticate`
+//  response makes the browser pop its native username/password dialog on ANY
+//  401 in the /api/* space, which leaked the admin prompt onto public pages
+//  (the app auto-fetches /api/catalog on every load). A cookie check never
+//  emits that header, so ordinary visitors are never challenged.
+//
+//  Unauthenticated requests:
+//    • /admin pages  → redirected to the /admin/login form.
+//    • gated APIs    → plain 401 JSON (no WWW-Authenticate, no dialog).
+//
+//  Note: /api/catalog is intentionally NOT matched — GET is public and PUT
+//  checks the admin cookie inside the route handler.
 //
 //  In Next.js 16 the old `middleware.ts` is renamed to `proxy.ts` and runs on
-//  the Node.js runtime by default.
+//  the Node.js runtime by default (so node:crypto in lib/admin-auth works).
 // ─────────────────────────────────────────────────────────────────────────
 
-function unauthorized(): NextResponse {
-  return new NextResponse("Authentication required.", {
-    status: 401,
-    headers: { "WWW-Authenticate": 'Basic realm="NailGallery Admin", charset="UTF-8"' },
-  });
-}
-
 export function proxy(request: NextRequest): NextResponse {
-  // Anyone can read the gallery catalog.
-  if (request.method === "GET" && request.nextUrl.pathname === "/api/catalog") {
+  const { pathname } = request.nextUrl;
+
+  // The login page and its endpoints must stay reachable without a session.
+  if (pathname === "/admin/login") return NextResponse.next();
+
+  if (verifyAdminToken(request.cookies.get(ADMIN_COOKIE)?.value)) {
     return NextResponse.next();
   }
 
-  const user = process.env.ADMIN_USER;
-  const pass = process.env.ADMIN_PASSWORD;
-  // If no credentials are configured, don't lock anyone out (dev convenience).
-  if (!user || !pass) return NextResponse.next();
-
-  const header = request.headers.get("authorization");
-  if (header?.startsWith("Basic ")) {
-    let decoded = "";
-    try {
-      decoded = atob(header.slice(6));
-    } catch {
-      return unauthorized();
-    }
-    const sep = decoded.indexOf(":");
-    const u = decoded.slice(0, sep);
-    const p = decoded.slice(sep + 1);
-    if (u === user && p === pass) return NextResponse.next();
+  // Admin page navigation → show the login form (preserve the intended path).
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/admin/login";
+    url.search = "";
+    url.searchParams.set("next", pathname);
+    return NextResponse.redirect(url);
   }
 
-  return unauthorized();
+  // Gated API routes → 401 without a Basic challenge.
+  return NextResponse.json({ error: "Admin authentication required." }, { status: 401 });
 }
 
 export const config = {
   matcher: [
     "/admin",
     "/admin/:path*",
-    "/api/catalog",
     "/api/store-image",
     "/api/auto-tag",
     "/api/auto-tag/:path*",
